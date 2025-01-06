@@ -76,6 +76,7 @@ img_seg = ImgSegmentation("0.png", max_depth=1)
 dc_trace = DCGenTrace.from_img_seg(img_seg, bot, prompt_leaf=prompt_dict["promt_leaf"], prompt_node=prompt_dict["promt_node"])
 dc_trace.generate_code(recursive=True, cut_out=False)
 dc_trace.display_tree()
+dc_trace.code
 ```
 
 ## 4. Calculate Score (linux only)
