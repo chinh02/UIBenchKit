@@ -9,7 +9,6 @@ This repository contains:
 4. **A user-friendly tool based on DCGen**.
 
 
-
 Quick links: [Demo video](#Demo-video) | [DCGen Examples](#Examples) | [Code usage](#Code-usage) | [Tool usage](#DCGen-tool) 
 
 
