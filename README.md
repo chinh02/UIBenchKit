@@ -1,4 +1,6 @@
-This is the artifact for the paper "Automatically Generating UI Code from Screenshot: A Divide-and-Conquer-Based Approach." This artifact supplies the DCGen toolkit and supplementary materials for the paper.
+# Automatically Generating UI Code from Screenshot: A Divide-and-Conquer-Based Approach
+
+This is the artifact for the paper ["Automatically Generating UI Code from Screenshot: A Divide-and-Conquer-Based Approach."](https://arxiv.org/abs/2406.16386) This artifact supplies the DCGen toolkit and supplementary materials for the paper.
 
 
 This repository contains:
@@ -9,7 +11,7 @@ This repository contains:
 4. **A user-friendly tool based on DCGen**.
 
 
-Quick links: [Demo video](#Demo-video) | [DCGen Examples](#Examples) | [Code usage](#Code-usage) | [Tool usage](#DCGen-tool) 
+Quick links: :tv:[Demo video](#Demo-video) | :pencil:[DCGen Examples](#Examples) | 🖥️:[Code usage](#Code-usage) | 🔨:[Tool usage](#DCGen-tool) 
 
 
 # Abstract
