@@ -11,7 +11,7 @@ This repository contains:
 4. **A user-friendly tool based on DCGen**.
 
 
-Quick links: :tv:[Demo video](#Demo-video) | :pencil:[DCGen Examples](#Examples) | 🖥️:[Code usage](#Code-usage) | 🔨:[Tool usage](#DCGen-tool) 
+Quick links: :tv:[Demo video](#Demo-video) | :pencil:[DCGen Examples](#Examples) | 🖥️[Code usage](#Code-usage) | 🔨[Tool usage](#DCGen-tool) 
 
 
 # Abstract
