@@ -16,4 +16,10 @@ requests
 flask==3.0.3
 rapidfuzz==3.6.2
 anthropic
-httpx==0.27.2 
+httpx==0.27.2
+datasets
+joblib
+huggingface_hub
+playwright
+python-dotenv
+numpy

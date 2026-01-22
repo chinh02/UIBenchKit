@@ -17,16 +17,49 @@ import json
 import anthropic
 
 def take_screenshot(driver, filename):
-    driver.save_full_page_screenshot(filename)
+    # save_full_page_screenshot is Firefox-only, use get_screenshot_as_file for Chrome
+    try:
+        driver.save_full_page_screenshot(filename)
+    except AttributeError:
+        # Chrome doesn't have save_full_page_screenshot, use regular screenshot
+        driver.save_screenshot(filename)
 
 def get_driver(file=None, headless=True, string=None, window_size=(1920, 1080)):
     assert file or string, "You must provide a file or a string"
-    options = Options()
-    if headless:
-        options.add_argument("-headless")
-        driver = webdriver.Firefox(options=options)  # or use another driver
-    else:
+    
+    # Try Chrome first (better Docker support), fall back to Firefox
+    try:
+        from selenium.webdriver.chrome.options import Options as ChromeOptions
+        from selenium.webdriver.chrome.service import Service as ChromeService
+        
+        options = ChromeOptions()
+        if headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument(f"--window-size={window_size[0]},{window_size[1]}")
+        
+        # Check for custom chromedriver path (Docker)
+        chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
+        chrome_bin = os.environ.get("CHROME_BIN")
+        
+        if chrome_bin:
+            options.binary_location = chrome_bin
+        
+        if chromedriver_path:
+            service = ChromeService(executable_path=chromedriver_path)
+            driver = webdriver.Chrome(service=service, options=options)
+        else:
+            driver = webdriver.Chrome(options=options)
+            
+    except Exception as e:
+        # Fall back to Firefox
+        options = Options()
+        if headless:
+            options.add_argument("-headless")
         driver = webdriver.Firefox(options=options)
+        driver.set_window_size(window_size[0], window_size[1])
 
     if not string:
         driver.get("file:///" + os.getcwd() + "/" + file)
@@ -34,7 +67,6 @@ def get_driver(file=None, headless=True, string=None, window_size=(1920, 1080)):
         string = base64.b64encode(string.encode('utf-8')).decode()
         driver.get("data:text/html;base64," + string)
 
-    driver.set_window_size(window_size[0], window_size[1])
     return driver
 
 
@@ -69,13 +101,33 @@ def get_driver_pw(file=None, headless=True, string=None, window_size=(1920, 1080
     return page, browser  # Return the page and browser objects
 
 
-with open('./placeholder.png', 'rb') as image_file:
-    # Read the image as a binary stream
-    img_data = image_file.read()
-    # Convert the image to base64
-    img_base64 = base64.b64encode(img_data).decode('utf-8')
-    # Create a base64 URL (assuming it's a PNG image)
-    PLACEHOLDER_URL = f"data:image/png;base64,{img_base64}"
+# Try to load placeholder from multiple possible locations
+PLACEHOLDER_URL = None
+placeholder_paths = [
+    './placeholder.png',
+    './scripts/placeholder.png',
+    './Tool/static/placeholder.png',
+    os.path.join(os.path.dirname(__file__), 'placeholder.png'),
+    os.path.join(os.path.dirname(__file__), 'scripts', 'placeholder.png'),
+    os.path.join(os.path.dirname(__file__), 'Tool', 'static', 'placeholder.png')
+]
+
+for placeholder_path in placeholder_paths:
+    if os.path.exists(placeholder_path):
+        with open(placeholder_path, 'rb') as image_file:
+            # Read the image as a binary stream
+            img_data = image_file.read()
+            # Convert the image to base64
+            img_base64 = base64.b64encode(img_data).decode('utf-8')
+            # Create a base64 URL (assuming it's a PNG image)
+            PLACEHOLDER_URL = f"data:image/png;base64,{img_base64}"
+        break
+
+if PLACEHOLDER_URL is None:
+    # Fallback: create a simple 1x1 transparent PNG
+    import base64
+    transparent_png = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
+    PLACEHOLDER_URL = f"data:image/png;base64,{base64.b64encode(transparent_png).decode('utf-8')}"
 
 def get_placeholder(html):
     html_with_base64 = html.replace("placeholder.png", PLACEHOLDER_URL)
@@ -91,9 +143,43 @@ class Bot:
         else:
             self.key = key_path
         self.patience = patience
+        # Token tracking (base implementation)
+        self.total_prompt_tokens = 0
+        self.total_response_tokens = 0
+        self.call_count = 0
+        self.token_log = []
     
     def ask(self):
         raise NotImplementedError
+    
+    def get_token_usage(self):
+        """Return token usage statistics"""
+        return {
+            "total_prompt_tokens": self.total_prompt_tokens,
+            "total_response_tokens": self.total_response_tokens,
+            "total_tokens": self.total_prompt_tokens + self.total_response_tokens,
+            "call_count": self.call_count
+        }
+    
+    def reset_token_usage(self):
+        """Reset token counters"""
+        self.total_prompt_tokens = 0
+        self.total_response_tokens = 0
+        self.call_count = 0
+        self.token_log = []
+    
+    def print_token_usage(self, label=""):
+        """Print token usage summary and return usage dict"""
+        usage = self.get_token_usage()
+        print(f"\n{'=' * 50}")
+        print(f"TOKEN USAGE{' - ' + label if label else ''}")
+        print(f"{'=' * 50}")
+        print(f"  API Calls:       {usage['call_count']}")
+        print(f"  Prompt Tokens:   {usage['total_prompt_tokens']:,}")
+        print(f"  Response Tokens: {usage['total_response_tokens']:,}")
+        print(f"  Total Tokens:    {usage['total_tokens']:,}")
+        print(f"{'=' * 50}")
+        return usage
     
     def attempt_ask_with_retries(self, question, image_encoding, verbose):
         for attempt in range(self.patience):
@@ -210,15 +296,17 @@ class Bot:
 
 
 class Gemini(Bot):
-    def __init__(self, key_path, patience=3) -> None:
+    def __init__(self, key_path, patience=3, model="gemini-2.0-flash") -> None:
         super().__init__(key_path, patience)
         GOOGLE_API_KEY= self.key
         genai.configure(api_key=GOOGLE_API_KEY)
         self.name = "gemini"
+        self.model = model  # Store the model version
+        self.model_version = model  # For compatibility with api.py
         self.file_count = 0
         
     def ask(self, question, image_encoding=None, verbose=False):
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel(self.model)
         config = genai.types.GenerationConfig(temperature=0.2, max_output_tokens=10000)
 
         if verbose:
@@ -233,6 +321,20 @@ class Gemini(Bot):
             response = model.generate_content(question, request_options={"timeout": 3000}, generation_config=config)
         response.resolve()
 
+        # Track token usage
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            prompt_tokens = response.usage_metadata.prompt_token_count
+            response_tokens = response.usage_metadata.candidates_token_count
+            self.total_prompt_tokens += prompt_tokens
+            self.total_response_tokens += response_tokens
+            self.call_count += 1
+            self.token_log.append({
+                "call_id": self.call_count,
+                "prompt_tokens": prompt_tokens,
+                "response_tokens": response_tokens,
+                "total": prompt_tokens + response_tokens
+            })
+
         if verbose:
             print("####################################")
             print("response:\n", response.text)
@@ -240,18 +342,15 @@ class Gemini(Bot):
 
         return response.text
 
+
 class GPT4(Bot):
-    def __init__(self, key_path, patience=3, model="gpt-4o") -> None:
+    def __init__(self, key_path, patience=3, model="gpt-4o", base_url=None) -> None:
         super().__init__(key_path, patience)
-        self.client = OpenAI(api_key=self.key)
-        # self.client = AzureOpenAI(
-        #             azure_endpoint="",
-        #             api_key="",
-        #             api_version=""
-        #         )
+        self.client = OpenAI(api_key=self.key, base_url=base_url)
         self.name="gpt4"
         self.model = model
-        self.max_tokens = 10000
+        self.model_version = model  # For compatibility with api.py
+        self.max_tokens = 10000  # Reduced from 10000 to 4096 for OpenAI-compatible APIs
         
     def ask(self, question, image_encoding=None, verbose=False):
         
@@ -279,34 +378,52 @@ class GPT4(Bot):
         temperature=0.2,
         seed=42,
         )
-        response = response.choices[0].message.content
+        
+        # Track token usage from OpenAI response
+        if hasattr(response, 'usage') and response.usage:
+            prompt_tokens = response.usage.prompt_tokens or 0
+            completion_tokens = response.usage.completion_tokens or 0
+            self.total_prompt_tokens += prompt_tokens
+            self.total_response_tokens += completion_tokens
+            self.call_count += 1
+            self.token_log.append({
+                "call_id": self.call_count,
+                "prompt_tokens": prompt_tokens,
+                "response_tokens": completion_tokens,
+                "total": prompt_tokens + completion_tokens
+            })
+        
+        response_text = response.choices[0].message.content
         if verbose:
             print("####################################")
             print("question:\n", question)
             print("####################################")
-            print("response:\n", response)
+            print("response:\n", response_text)
             print("seed used: 42")
             # img = base64.b64decode(image_encoding)
             # img = Image.open(io.BytesIO(img))
             # img.show()
-        return response
+        return response_text
 
 class QwenVL(GPT4):
     def __init__(self, key_path, model="qwen2.5-vl-72b-instruct", patience=3) -> None:
         super().__init__(key_path, patience, model)
         self.name = "qwenvl"
+        self.model_version = model  # For compatibility with api.py
         self.client = OpenAI(api_key=self.key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
         self.max_tokens = 8192
 
 
 class Claude(Bot):
-    def __init__(self, key_path, patience=3) -> None:
+    def __init__(self, key_path, patience=3, model="claude-3-5-sonnet-20241022") -> None:
         super().__init__(key_path, patience)
         self.client = anthropic.Anthropic(
             # defaults to os.environ.get("ANTHROPIC_API_KEY")
             api_key=self.key,
         )
         self.name = "claude"
+        self.model = model  # Store the model version
+        self.model_version = model  # For compatibility with api.py
         self.file_count = 0
         
     def ask(self, question, image_encoding=None, verbose=False):
@@ -334,11 +451,26 @@ class Claude(Bot):
 
 
         message = self.client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=self.model,
             max_tokens=8192,
             temperature=0.2,
             messages=[content],
         )
+        
+        # Track token usage from Anthropic response
+        if hasattr(message, 'usage') and message.usage:
+            prompt_tokens = message.usage.input_tokens or 0
+            completion_tokens = message.usage.output_tokens or 0
+            self.total_prompt_tokens += prompt_tokens
+            self.total_response_tokens += completion_tokens
+            self.call_count += 1
+            self.token_log.append({
+                "call_id": self.call_count,
+                "prompt_tokens": prompt_tokens,
+                "response_tokens": completion_tokens,
+                "total": prompt_tokens + completion_tokens
+            })
+        
         response = message.content[0].text
         if verbose:
             print("####################################")

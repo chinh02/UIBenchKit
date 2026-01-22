@@ -149,4 +149,193 @@ Note that the fine-grained metrics can only be run on linux or mac.
    **Generate code for a image segment**
    <img src="./assets/dcgenui3.png" alt="dcgenui3" style="zoom:20%;" />
 
+
+# DCGen API Server
+
+The DCGen API server provides a REST API for running experiments at scale with comprehensive evaluation metrics.
+
+## Quick Start
+
+```bash
+# Start the API server
+python api.py --host 0.0.0.0 --port 8000
+
+# Or with gunicorn for production
+gunicorn -w 4 -b 0.0.0.0:8000 api:app
+```
+
+## Project Structure (Modular Architecture)
+
+```
+DCGen/
+├── api.py              # Main Flask app
+├── config.py           # Configuration, model pricing, prompts
+├── models.py           # Run and RunManager classes
+├── evaluation/         # Evaluation metrics package
+│   ├── __init__.py
+│   ├── base.py         # BaseEvaluator abstract class
+│   ├── code_similarity.py
+│   ├── clip_score.py
+│   ├── fine_grained.py # Design2Code metrics
+│   └── mllm_judge.py   # MLLM-as-a-Judge evaluator
+├── routes/             # Flask route blueprints
+│   ├── __init__.py
+│   ├── auth.py         # API key management
+│   ├── datasets.py     # Dataset endpoints
+│   ├── evaluation.py   # MLLM Judge endpoints
+│   └── runs.py         # Run management
+└── utils.py            # Core utilities
+```
+
+## MLLM-as-a-Judge
+
+MLLM-as-a-Judge is a novel evaluation approach that uses Multimodal LLMs to assess generated webpages against reference designs.
+
+### Features
+
+- **Single Score Mode**: Get detailed scores (layout, visual fidelity, content, polish)
+- **Pairwise Comparison**: Compare two model outputs to determine the better one
+- **Criteria Check**: Yes/No evaluation on specific design criteria
+
+### API Endpoints
+
+#### Single Sample Evaluation
+
+```bash
+curl -X POST http://localhost:8000/evaluate/mllm-judge \
+  -H "x-api-key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "single_score",
+    "judge_model": "gemini-2.0-flash",
+    "reference_image": "/path/to/reference.png",
+    "generated_screenshot": "/path/to/generated.png"
+  }'
+```
+
+Response:
+```json
+{
+  "scores": {
+    "layout_accuracy": 0.85,
+    "visual_fidelity": 0.78,
+    "content_completeness": 0.92,
+    "responsiveness_polish": 0.80,
+    "overall_score": 0.84
+  },
+  "metadata": {
+    "full_response": {
+      "strengths": ["Good layout structure", "Text content accurate"],
+      "weaknesses": ["Color mismatch in header", "Missing footer element"],
+      "summary": "Good reproduction with minor visual discrepancies"
+    }
+  }
+}
+```
+
+#### Run-Level Evaluation
+
+```bash
+curl -X POST http://localhost:8000/evaluate/mllm-judge/run \
+  -H "x-api-key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "run_id": "design2code_dcgen_gpt-4o_20240101_120000",
+    "judge_model": "gemini-2.0-flash",
+    "mode": "single_score"
+  }'
+```
+
+#### Model Comparison
+
+```bash
+curl -X POST http://localhost:8000/evaluate/compare-models \
+  -H "x-api-key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "run_id_a": "design2code_dcgen_gpt-4o_run",
+    "run_id_b": "design2code_dcgen_gemini_run",
+    "judge_model": "claude-3-5-sonnet"
+  }'
+```
+
+Response:
+```json
+{
+  "model_a": {
+    "model": "gpt-4o",
+    "wins": 35,
+    "win_rate": 0.58
+  },
+  "model_b": {
+    "model": "gemini-2.0-flash",
+    "wins": 22,
+    "win_rate": 0.37
+  },
+  "ties": 3,
+  "total_comparisons": 60
+}
+```
+
+### Using MLLM Judge Programmatically
+
+```python
+from evaluation.mllm_judge import MLLMJudgeEvaluator, JudgeMode
+
+# Initialize evaluator
+evaluator = MLLMJudgeEvaluator({
+    "model_family": "gemini",
+    "model_version": "gemini-2.0-flash",
+    "mode": "single_score",
+    "temperature": 0.1
+})
+
+# Evaluate a sample
+result = evaluator.evaluate_sample(
+    generated_html_path="output/sample1.html",
+    reference_image_path="data/sample1.png",
+    generated_screenshot_path="output/sample1.png"
+)
+
+print(result.scores)
+# {'layout_accuracy': 0.85, 'visual_fidelity': 0.78, ...}
+
+# Pairwise comparison
+comparison = evaluator.evaluate_pairwise(
+    reference_image_path="data/sample1.png",
+    model_a_screenshot="output_gpt4/sample1.png",
+    model_b_screenshot="output_gemini/sample1.png",
+    model_a_name="GPT-4o",
+    model_b_name="Gemini-2.0"
+)
+
+print(comparison)
+# {'winner': 'A', 'model_a_score': 8.5, 'model_b_score': 7.2, ...}
+```
+
+## Evaluation Metrics
+
+The API provides multiple evaluation metrics:
+
+| Metric | Description | Module |
+|--------|-------------|--------|
+| **Code Similarity** | Text-based HTML comparison | `evaluation/code_similarity.py` |
+| **CLIP Score** | Visual similarity via CLIP embeddings | `evaluation/clip_score.py` |
+| **Fine-Grained** | Block-Match, Text, Position, Color, CLIP | `evaluation/fine_grained.py` |
+| **MLLM Judge** | VLM-based qualitative assessment | `evaluation/mllm_judge.py` |
+
+## Supported Models
+
+### Generation Models
+- **OpenAI**: gpt-4o, gpt-4o-mini, gpt-4-turbo, o1, o3-mini
+- **Google**: gemini-2.0-flash, gemini-2.5-pro, gemini-1.5-pro
+- **Anthropic**: claude-3-5-sonnet, claude-3-opus
+- **Alibaba**: qwen2.5-vl-72b-instruct, qwen-vl-max
+
+### Judge Models (for MLLM-as-a-Judge)
+Any vision-capable model can be used as a judge. Recommended:
+- `gemini-2.0-flash` (fast, cost-effective)
+- `gpt-4o` (high quality)
+- `claude-3-5-sonnet` (balanced)
+
    

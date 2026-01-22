@@ -1,5 +1,98 @@
+# Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.tox
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
 *.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesis
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Credentials and API Keys
 *.key
+*.pem
+.env
+.env.*
+!.env.example
+config/credentials.json
+credentials/
+secrets/
+
+# Docker (not using)
+Dockerfile
+docker-compose.yml
+docker-compose.*.yml
+.dockerignore
+dcgen.service
+
+# Test files and temporary data
+test.html
+data/test.html
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Data directories (datasets, demos, generated content)
+data/*
+!data/README.md
+
+# Results and reports (generated data)
+results/
+dcgen-reports/
+mllm-judge-reports/
+token_comparison.json
+token_usage.json
+
+# Model artifacts (large files)
+models/
+*.model
+*.pkl
+*.h5
+*.pt
+*.pth
+
+# Deployment scripts (contains sensitive info)
+deploy/
+start.sh
+
+# Unrelated tools and scripts
+Tool/
+scripts/
 
