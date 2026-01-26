@@ -9,6 +9,8 @@ Provides Block-Match, Text, Position, Color, and CLIP scores.
 
 import os
 import sys
+import gc
+import traceback
 from typing import Dict, Any, Optional, List
 import contextlib
 import joblib
@@ -16,6 +18,34 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 
 from .base import BaseEvaluator, EvaluationResult
+
+
+def get_memory_info() -> Dict[str, float]:
+    """Get current memory usage info in MB."""
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        virtual = psutil.virtual_memory()
+        return {
+            "process_rss_mb": mem_info.rss / 1024 / 1024,
+            "process_vms_mb": mem_info.vms / 1024 / 1024,
+            "system_available_mb": virtual.available / 1024 / 1024,
+            "system_percent_used": virtual.percent
+        }
+    except ImportError:
+        return {"error": "psutil not installed"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def log_memory(prefix: str = ""):
+    """Log current memory usage."""
+    mem = get_memory_info()
+    if "error" not in mem:
+        print(f"[FineGrained] {prefix}Memory: process={mem['process_rss_mb']:.0f}MB, "
+              f"available={mem['system_available_mb']:.0f}MB ({mem['system_percent_used']:.1f}% used)")
+    return mem
 
 
 @contextlib.contextmanager
@@ -138,9 +168,11 @@ class FineGrainedEvaluator(BaseEvaluator):
                 results = self._visual_eval_func(input_list)
             finally:
                 os.chdir(cwd)
+                # Force garbage collection after each sample to reduce memory pressure
+                gc.collect()
             
             if not results or len(results) == 0:
-                 return EvaluationResult(sample_id=sample_id, metric_name=self.metric_name, success=False, error="No results returned")
+                 return EvaluationResult(sample_id=sample_id, metric_name=self.metric_name, success=False, error="No results returned from visual_eval_v3_multi")
             
             # We only had one prediction
             result_stats = results[0]
@@ -176,11 +208,13 @@ class FineGrainedEvaluator(BaseEvaluator):
             )
             
         except Exception as e:
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            print(f"[FineGrained] Error evaluating sample {sample_id}: {error_msg}")
             return EvaluationResult(
                 sample_id=sample_id,
                 metric_name=self.metric_name,
                 success=False,
-                error=str(e)
+                error=error_msg
             )
     
     def evaluate_run(
@@ -203,6 +237,10 @@ class FineGrainedEvaluator(BaseEvaluator):
         if not self._initialized:
             self.initialize()
         
+        # Log initial memory state
+        print(f"[FineGrained] Starting evaluation for {run_dir}")
+        log_memory("Initial - ")
+        
         # Find HTML files
         if sample_ids is None:
             sample_ids = []
@@ -212,6 +250,7 @@ class FineGrainedEvaluator(BaseEvaluator):
         
         results = {}
         all_results = []
+        failed_samples = []  # Track failed samples separately
         
         # Prepare evaluation tasks
         eval_tasks = []
@@ -227,53 +266,118 @@ class FineGrainedEvaluator(BaseEvaluator):
                     "success": False,
                     "error": "Reference HTML not found"
                 }
+                failed_samples.append(sample_id)
                 continue
             
-            eval_tasks.append((html_path, ref_html_path))
+            if not os.path.exists(html_path):
+                results[sample_id] = {
+                    "success": False,
+                    "error": "Generated HTML not found"
+                }
+                failed_samples.append(sample_id)
+                continue
+            
+            eval_tasks.append((html_path, ref_html_path, sample_id))
         
-        # Run evaluations in parallel (with memory-safe defaults)
+        print(f"[FineGrained] Prepared {len(eval_tasks)} evaluation tasks, {len(failed_samples)} pre-failed")
+        
+        # Run evaluations
         if eval_tasks:
-            # Default to 2 workers to avoid memory issues (each worker loads CLIP + spawns browser)
+            # Default to 1 worker for stability (each worker loads CLIP + spawns browser)
             # Can be overridden with DCGEN_FINE_GRAINED_WORKERS env var
-            default_workers = 2
+            # Setting to 1 avoids OOM issues from multiple CLIP models + browsers
+            default_workers = 1
             n_jobs = int(os.environ.get('DCGEN_FINE_GRAINED_WORKERS', default_workers))
             n_jobs = min(n_jobs, len(eval_tasks))
             
-            # For very large batches, further reduce parallelism
-            if len(eval_tasks) > 100 and n_jobs > 2:
-                n_jobs = 2
+            # Check available memory - if low, force sequential
+            mem_info = get_memory_info()
+            if "system_available_mb" in mem_info and mem_info["system_available_mb"] < 2000:
+                print(f"[FineGrained] Low memory ({mem_info['system_available_mb']:.0f}MB available), forcing sequential processing")
+                n_jobs = 1
             
-            try:
-                with tqdm_joblib(tqdm(total=len(eval_tasks), desc=f"Fine-grained evaluation (workers={n_jobs})")) as progress_bar:
-                    parallel_results = Parallel(n_jobs=n_jobs)(
-                        delayed(self.evaluate_sample)(html_path, ref_path) 
-                        for html_path, ref_path in eval_tasks
-                    )
-            except Exception as parallel_error:
-                # If parallel fails (memory issues), fall back to sequential
-                print(f"[FineGrained] Parallel processing failed ({parallel_error}), falling back to sequential")
+            parallel_failed = False
+            parallel_error_msg = None
+            
+            if n_jobs > 1:
+                try:
+                    print(f"[FineGrained] Running parallel evaluation with {n_jobs} workers...")
+                    with tqdm_joblib(tqdm(total=len(eval_tasks), desc=f"Fine-grained evaluation (workers={n_jobs})")) as progress_bar:
+                        parallel_results = Parallel(n_jobs=n_jobs, timeout=300)(
+                            delayed(self.evaluate_sample)(html_path, ref_path) 
+                            for html_path, ref_path, _ in eval_tasks
+                        )
+                except Exception as parallel_error:
+                    parallel_failed = True
+                    parallel_error_msg = str(parallel_error)
+                    print(f"[FineGrained] Parallel processing failed: {parallel_error}")
+                    print(f"[FineGrained] Full traceback:\n{traceback.format_exc()}")
+                    log_memory("After parallel failure - ")
+            else:
+                parallel_failed = True  # Skip parallel, go directly to sequential
+                parallel_error_msg = "Using sequential mode (n_jobs=1)"
+            
+            if parallel_failed:
+                # Sequential fallback with better error handling
+                print(f"[FineGrained] Running sequential evaluation ({parallel_error_msg})...")
+                log_memory("Before sequential - ")
+                
                 parallel_results = []
-                for html_path, ref_path in tqdm(eval_tasks, desc="Fine-grained evaluation (sequential)"):
+                for idx, (html_path, ref_path, sample_id) in enumerate(tqdm(eval_tasks, desc="Fine-grained evaluation (sequential)")):
                     try:
                         res = self.evaluate_sample(html_path, ref_path)
                         parallel_results.append(res)
+                        
+                        if not res.success:
+                            print(f"[FineGrained] Sample {sample_id} failed: {res.error}")
+                            failed_samples.append(sample_id)
+                        
+                        # Periodic memory logging and GC
+                        if (idx + 1) % 20 == 0:
+                            gc.collect()
+                            log_memory(f"After {idx + 1}/{len(eval_tasks)} samples - ")
+                            
                     except Exception as e:
-                        sample_id = os.path.splitext(os.path.basename(html_path))[0]
+                        error_msg = f"{type(e).__name__}: {str(e)}"
+                        print(f"[FineGrained] Exception evaluating sample {sample_id}: {error_msg}")
+                        print(f"[FineGrained] Traceback:\n{traceback.format_exc()}")
+                        
                         parallel_results.append(EvaluationResult(
                             sample_id=sample_id,
                             metric_name=self.metric_name,
                             success=False,
-                            error=str(e)
+                            error=error_msg
                         ))
-                
+                        failed_samples.append(sample_id)
+                        
+                        # Force GC after errors
+                        gc.collect()
+            
+            # Process results
             for res in parallel_results:
                 results[res.sample_id] = res.to_dict()
                 all_results.append(res)
+                
+                # Track failures
+                if not res.success and res.sample_id not in failed_samples:
+                    failed_samples.append(res.sample_id)
         
-        # Aggregate
+        # Log final stats
+        successful_count = len([r for r in all_results if r.success])
+        print(f"[FineGrained] Completed: {successful_count} successful, {len(failed_samples)} failed")
+        log_memory("Final - ")
+        
+        # Aggregate (only successful results)
         aggregated = self.aggregate_results(all_results)
+        
+        # Add failure tracking to output
+        aggregated["failed_samples"] = failed_samples
+        aggregated["failed_count"] = len(failed_samples)
+        aggregated["successful_count"] = successful_count
+        aggregated["total_count"] = len(eval_tasks) + len([s for s in failed_samples if s not in [t[2] for t in eval_tasks]])
         
         return {
             "per_sample": results,
-            "aggregate": aggregated
+            "aggregate": aggregated,
+            "failed_samples": failed_samples
         }

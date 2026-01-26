@@ -821,6 +821,7 @@ def run_fine_grained_evaluation(run: Run) -> dict:
         
         aggregate = eval_results.get("aggregate", {})
         per_sample = eval_results.get("per_sample", {})
+        failed_samples = eval_results.get("failed_samples", [])
         
         # Build results in the expected format
         results = {}
@@ -829,6 +830,7 @@ def run_fine_grained_evaluation(run: Run) -> dict:
         for metric_name in metric_names:
             scores_dict = {}
             for sample_id, sample_result in per_sample.items():
+                # Only include successful evaluations with actual scores
                 if sample_result.get("success") and "scores" in sample_result:
                     score_value = sample_result["scores"].get(metric_name)
                     if score_value is not None:
@@ -840,11 +842,23 @@ def run_fine_grained_evaluation(run: Run) -> dict:
                     "average": sum(scores_dict.values()) / len(scores_dict)
                 }
         
+        # Add failure tracking metadata
+        if failed_samples:
+            results["_metadata"] = {
+                "failed_samples": failed_samples,
+                "failed_count": len(failed_samples),
+                "successful_count": aggregate.get("successful_count", len(completed_sample_ids) - len(failed_samples)),
+                "total_attempted": len(completed_sample_ids)
+            }
+            print(f"[DCGen] Fine-grained evaluation: {len(failed_samples)} samples failed evaluation")
+        
         return results if results else None
         
     except Exception as e:
+        import traceback
         print(f"[DCGen] Fine-grained evaluation error: {e}")
-        return None
+        print(f"[DCGen] Traceback:\n{traceback.format_exc()}")
+        return {"error": str(e)}
 
 
 # ============================================================
@@ -901,14 +915,6 @@ def get_dataset_info(dataset_name: str):
         "info": info
     })
 
-
-# Dataset download endpoint removed - datasets are pre-downloaded
-# @app.route("/datasets/<dataset_name>/download", methods=["POST"])
-# Use dataset_manager.py CLI to download datasets manually if needed
-
-
-# Dataset delete endpoint removed - users cannot delete pre-downloaded datasets
-# @app.route("/datasets/<dataset_name>", methods=["DELETE"])
 
 
 @app.route("/datasets/<dataset_name>/samples", methods=["GET"])
