@@ -154,6 +154,58 @@ MODEL_FAMILIES = {
              "moonshot-v1-128k",
              "kimi-k2"
          ]
+    },
+    "mistral": {
+        "default": "us.mistral.mistral-large-2407-v1:0",
+        "versions": [
+            # AWS Bedrock Mistral models - Cross-region inference profiles (recommended)
+            "us.mistral.mistral-large-2407-v1:0",
+            "us.mistral.mistral-large-2402-v1:0",
+            "us.mistral.mistral-small-2402-v1:0",
+            "us.mistral.mixtral-8x7b-instruct-v0:1",
+            "us.mistral.mistral-7b-instruct-v0:2",
+            "us.mistral.pixtral-large-2411-v1:0",
+            "us.mistral.pixtral-12b-2409-v1:0",
+            # Direct model IDs (on-demand)
+            "mistral.mistral-large-2407-v1:0",
+            "mistral.mistral-large-2402-v1:0",
+            "mistral.mistral-small-2402-v1:0",
+            "mistral.mixtral-8x7b-instruct-v0:1",
+            "mistral.mistral-7b-instruct-v0:2",
+            "mistral.pixtral-large-2411-v1:0",
+            "mistral.pixtral-12b-2409-v1:0",
+        ]
+    },
+    "llama": {
+        "default": "us.meta.llama3-2-90b-instruct-v1:0",
+        "versions": [
+            # AWS Bedrock Llama models - Cross-region inference profiles (recommended)
+            # Use us.*, eu.*, or apac.* prefix for cross-region inference
+            "us.meta.llama3-2-90b-instruct-v1:0",
+            "us.meta.llama3-2-11b-instruct-v1:0",
+            "us.meta.llama3-2-3b-instruct-v1:0",
+            "us.meta.llama3-2-1b-instruct-v1:0",
+            "us.meta.llama3-1-405b-instruct-v1:0",
+            "us.meta.llama3-1-70b-instruct-v1:0",
+            "us.meta.llama3-1-8b-instruct-v1:0",
+            "us.meta.llama3-70b-instruct-v1:0",
+            "us.meta.llama3-8b-instruct-v1:0",
+            # Llama 4 models
+            "us.meta.llama4-scout-17b-instruct-v1:0",
+            "us.meta.llama4-maverick-17b-128e-instruct-v1:0",
+            # Direct model IDs (on-demand, may not be available in all regions)
+            "meta.llama3-2-90b-instruct-v1:0",
+            "meta.llama3-2-11b-instruct-v1:0",
+            "meta.llama3-2-3b-instruct-v1:0",
+            "meta.llama3-2-1b-instruct-v1:0",
+            "meta.llama3-1-405b-instruct-v1:0",
+            "meta.llama3-1-70b-instruct-v1:0",
+            "meta.llama3-1-8b-instruct-v1:0",
+            "meta.llama3-70b-instruct-v1:0",
+            "meta.llama3-8b-instruct-v1:0",
+            "meta.llama4-scout-17b-instruct-v1:0",
+            "meta.llama4-maverick-17b-128e-instruct-v1:0",
+        ]
     }
 }
 
@@ -225,6 +277,31 @@ MODEL_PRICING = {
     # Doubao
     "doubao-pro-4k": {"input": 0.012, "output": 0.015},
     "doubao-pro-32k": {"input": 0.012, "output": 0.015},
+    
+    # AWS Bedrock - Mistral models (per 1M tokens)
+    "mistral.mistral-large-2407-v1:0": {"input": 3.00, "output": 9.00},
+    "mistral.mistral-large-2402-v1:0": {"input": 4.00, "output": 12.00},
+    "mistral.mistral-small-2402-v1:0": {"input": 0.10, "output": 0.30},
+    "mistral.mixtral-8x7b-instruct-v0:1": {"input": 0.45, "output": 0.70},
+    "mistral.mistral-7b-instruct-v0:2": {"input": 0.15, "output": 0.20},
+    "mistral.pixtral-large-2411-v1:0": {"input": 3.00, "output": 9.00},
+    "mistral.pixtral-12b-2409-v1:0": {"input": 0.15, "output": 0.15},
+    
+    # AWS Bedrock - Meta Llama models (per 1M tokens)
+    "meta.llama3-2-90b-instruct-v1:0": {"input": 2.00, "output": 2.00},
+    "meta.llama3-2-11b-instruct-v1:0": {"input": 0.35, "output": 0.40},
+    "meta.llama3-2-3b-instruct-v1:0": {"input": 0.15, "output": 0.15},
+    "meta.llama3-2-1b-instruct-v1:0": {"input": 0.10, "output": 0.10},
+    "meta.llama3-1-405b-instruct-v1:0": {"input": 5.32, "output": 16.00},
+    "meta.llama3-1-70b-instruct-v1:0": {"input": 2.65, "output": 3.50},
+    "meta.llama3-1-8b-instruct-v1:0": {"input": 0.30, "output": 0.60},
+    "meta.llama3-70b-instruct-v1:0": {"input": 2.65, "output": 3.50},
+    "meta.llama3-8b-instruct-v1:0": {"input": 0.30, "output": 0.60},
+    "meta.llama4-scout-17b-instruct-v1:0": {"input": 0.17, "output": 0.68},
+    "meta.llama4-maverick-17b-128e-instruct-v1:0": {"input": 0.20, "output": 0.80},
+    
+    # Cross-region inference profiles have same pricing as base models
+    # The calculate_cost function will strip the region prefix when looking up prices
 }
 
 DEFAULT_PRICING = {"input": 5.00, "output": 15.00}
@@ -351,7 +428,12 @@ def calculate_cost(model: str, token_usage: dict) -> dict:
     if not token_usage:
         return None
     
-    pricing = MODEL_PRICING.get(model, DEFAULT_PRICING)
+    # Strip cross-region inference profile prefix (us., eu., apac.) for pricing lookup
+    model_for_pricing = model
+    if model.lower().startswith(("us.", "eu.", "apac.")):
+        model_for_pricing = model.split(".", 1)[1] if "." in model else model
+    
+    pricing = MODEL_PRICING.get(model_for_pricing, MODEL_PRICING.get(model, DEFAULT_PRICING))
     
     input_tokens = token_usage.get("total_prompt_tokens", 0)
     output_tokens = token_usage.get("total_response_tokens", 0)
@@ -411,5 +493,20 @@ def get_model_info(model_name: str) -> tuple:
         return "doubao", model_name
     elif model_name_lower.startswith("moonshot") or model_name_lower.startswith("kimi"):
         return "kimi", model_name
+    elif model_name_lower.startswith("mistral") or model_name_lower.startswith("pixtral"):
+        return "mistral", model_name
+    elif model_name_lower.startswith("meta.llama") or model_name_lower.startswith("llama"):
+        return "llama", model_name
+    # AWS Bedrock cross-region inference profiles (us.*, eu.*, apac.*)
+    elif model_name_lower.startswith(("us.", "eu.", "apac.")):
+        # Extract the actual model identifier after the region prefix
+        # e.g., "us.meta.llama4-scout-17b-instruct-v1:0" -> check "meta.llama4..."
+        model_without_region = model_name_lower.split(".", 1)[1] if "." in model_name_lower else model_name_lower
+        if "mistral" in model_without_region or "pixtral" in model_without_region:
+            return "mistral", model_name
+        elif "meta" in model_without_region or "llama" in model_without_region:
+            return "llama", model_name
+        # Default to llama for unrecognized bedrock models
+        return "llama", model_name
     
     return None, None

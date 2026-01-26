@@ -59,7 +59,7 @@ if FINE_GRAINED_METRICS_AVAILABLE:
 
 from utils import (
     encode_image, get_driver, take_screenshot,
-    GPT4, Gemini, Claude, QwenVL,
+    GPT4, Gemini, Claude, QwenVL, BedrockBot,
     ImgSegmentation, DCGenGrid
 )
 from dataset_manager import DatasetManager, DATASETS_CONFIG, get_dataset_manager
@@ -455,6 +455,14 @@ def get_bot(model_name: str):
             
         raise ValueError("QWEN_API_KEY not found (and fallback to OpenKey failed)")
     
+    elif family in ["mistral", "llama"]:
+        # AWS Bedrock models - credentials from AWS CLI config or environment
+        # Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or IAM role)
+        # Optional: AWS_REGION (defaults to us-east-1)
+        region = os.getenv("AWS_REGION", "us-east-1")
+        print(f"Initializing {family} model ({version}) via AWS Bedrock in region {region}")
+        return BedrockBot(model_id=version, region_name=region)
+    
     else:
         raise ValueError(f"Unknown model family: {family}")
 
@@ -475,6 +483,25 @@ def get_image_files(directory: str, exclude=["placeholder", "bbox"]):
 def ensure_dir(path: str):
     """Create directory if it doesn't exist."""
     os.makedirs(path, exist_ok=True)
+
+
+def sanitize_for_filename(name: str) -> str:
+    """Sanitize a string to be safe for use in file/directory names.
+    
+    Replaces characters that are invalid on Windows (: * ? " < > |) and
+    other problematic characters with hyphens.
+    """
+    # Replace invalid Windows filename characters
+    invalid_chars = [':', '*', '?', '"', '<', '>', '|', '\\', '/']
+    result = name
+    for char in invalid_chars:
+        result = result.replace(char, '-')
+    # Also replace dots (common in model versions) for consistency
+    result = result.replace('.', '-')
+    # Remove any double hyphens that may have been created
+    while '--' in result:
+        result = result.replace('--', '-')
+    return result.strip('-')
 
 
 def resolve_path(path: str) -> str:
@@ -1095,14 +1122,14 @@ def submit():
         # Prepare benchmark directory
         input_dir = dm.prepare_benchmark_dir(dataset_name, sample_ids)
         # Use model version in run_id for clarity
-        run_id = data.get("run_id") or f"{dataset_name}_{method}_{model_version.replace('.', '-')}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        run_id = data.get("run_id") or f"{dataset_name}_{method}_{sanitize_for_filename(model_version)}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
     elif "input_dir" in data:
         # Using a custom directory
         input_dir = resolve_path(data["input_dir"])
         if not os.path.exists(input_dir):
             return jsonify({"message": f"Input directory not found: {input_dir}"}), 400
-        run_id = data.get("run_id") or f"{method}_{model_version.replace('.', '-')}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        run_id = data.get("run_id") or f"{method}_{sanitize_for_filename(model_version)}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         dataset_name = None
         
     else:
@@ -1817,14 +1844,14 @@ def run_all():
         
         # Prepare benchmark directory
         input_dir = dm.prepare_benchmark_dir(dataset_name, sample_ids)
-        base_run_id = data.get("run_id") or f"{dataset_name}_{model_version.replace('.', '-')}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        base_run_id = data.get("run_id") or f"{dataset_name}_{sanitize_for_filename(model_version)}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
     elif "input_dir" in data:
         # Using a custom directory
         input_dir = resolve_path(data["input_dir"])
         if not os.path.exists(input_dir):
             return jsonify({"message": f"Input directory not found: {input_dir}"}), 400
-        base_run_id = data.get("run_id") or f"exp_{model_version.replace('.', '-')}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        base_run_id = data.get("run_id") or f"exp_{sanitize_for_filename(model_version)}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         dataset_name = None
         
     else:
