@@ -38,9 +38,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from utils import (
     encode_image, get_driver, take_screenshot,
-    GPT4, Gemini, Claude, QwenVL,
     ImgSegmentation, DCGenGrid
 )
+from models import GPT4, Gemini, Claude, QwenVL
 from dotenv import load_dotenv
 from tqdm import tqdm
 from threading import Thread

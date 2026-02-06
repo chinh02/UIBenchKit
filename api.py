@@ -59,9 +59,10 @@ if FINE_GRAINED_METRICS_AVAILABLE:
 
 from utils import (
     encode_image, get_driver, take_screenshot,
-    GPT4, Gemini, Claude, QwenVL, BedrockBot,
     ImgSegmentation, DCGenGrid
 )
+from models import GPT4, Gemini, Claude, QwenVL, BedrockBot
+from methods.latcoder import generate_latcoder
 from dataset_manager import DatasetManager, DATASETS_CONFIG, get_dataset_manager
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -110,7 +111,7 @@ API_KEYS[DEFAULT_API_KEY] = {"email": "dev@localhost", "verified": True, "create
 
 # Model families and their supported versions are imported from config.py
 
-SUPPORTED_METHODS = ["dcgen", "direct"]
+SUPPORTED_METHODS = ["dcgen", "direct", "latcoder"]
 SUPPORTED_DATASETS = list(DATASETS_CONFIG.keys())  # ["design2code", "dcgen"]
 
 # ============================================================
@@ -623,6 +624,8 @@ def run_experiment_task(run: Run):
             try:
                 if run.method == "dcgen":
                     generate_dcgen(bot, img_path, save_path, SEG_PARAMS_DEFAULT)
+                elif run.method == "latcoder":
+                    generate_latcoder(bot, img_path, save_path)
                 else:
                     generate_single(PROMPT_DIRECT, bot, img_path, save_path)
                 
@@ -1885,7 +1888,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="DCGen API Server")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=5000, help="Port to bind (default: 5000)")
+    parser.add_argument("--port", type=int, default=9999, help="Port to bind (default: 5000)")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     args = parser.parse_args()

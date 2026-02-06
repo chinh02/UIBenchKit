@@ -81,7 +81,6 @@ token_comparison.json
 token_usage.json
 
 # Model artifacts (large files)
-models/
 *.model
 *.pkl
 *.h5

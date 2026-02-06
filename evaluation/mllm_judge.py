@@ -325,12 +325,25 @@ class MLLMJudgeEvaluator(BaseEvaluator):
             "text": prompt
         })
         
-        response = self._openai_client.chat.completions.create(
-            model=self.judge_config.model_version,
-            messages=[{"role": "user", "content": content}],
-            temperature=self.judge_config.temperature,
-            max_tokens=self.judge_config.max_tokens
-        )
+        # Newer models (gpt-5, o1, o3, gpt-4.1, etc.) have different parameter requirements:
+        # - Use max_completion_tokens instead of max_tokens
+        # - Temperature must be 1 (default) - custom values not supported
+        model_version = self.judge_config.model_version.lower()
+        is_new_model = any(x in model_version for x in ['gpt-5', 'o1', 'o3', 'gpt-4.1', 'gpt-4-1'])
+        
+        api_params = {
+            "model": self.judge_config.model_version,
+            "messages": [{"role": "user", "content": content}],
+        }
+        
+        if is_new_model:
+            api_params["max_completion_tokens"] = self.judge_config.max_tokens
+            # New models don't support custom temperature, use default (1)
+        else:
+            api_params["max_tokens"] = self.judge_config.max_tokens
+            api_params["temperature"] = self.judge_config.temperature
+        
+        response = self._openai_client.chat.completions.create(**api_params)
         
         # Track tokens
         if response.usage:
