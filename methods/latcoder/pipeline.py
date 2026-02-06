@@ -117,7 +117,18 @@ def generate_module_code(bot, image: Image.Image, plans: List[List[float]],
                 imgs = []
                 for s in range(samples):
                     response = bot.ask(PROMPT_GENERATE, module_b64, verbose=False)
-                    code = extract_html_from_response(response) or response
+                    code = extract_html_from_response(response)
+                    
+                    # Validate response - retry if model failed to return HTML
+                    if not code or 'unable to view' in response.lower() or '<html' not in response.lower():
+                        logger.warning(f"Module {index} sample {s}: Invalid response, retrying...")
+                        response = bot.ask(PROMPT_GENERATE, module_b64, verbose=False)
+                        code = extract_html_from_response(response)
+                    
+                    if not code:
+                        logger.warning(f"Module {index} sample {s}: No valid HTML extracted, using raw response")
+                        code = response
+                    
                     code = remove_code_markers(code)
                     codes.append(code)
                     
@@ -142,7 +153,18 @@ def generate_module_code(bot, image: Image.Image, plans: List[List[float]],
                     pred_img = imgs[0] if imgs else None
             else:
                 response = bot.ask(PROMPT_GENERATE, module_b64, verbose=False)
-                code = extract_html_from_response(response) or response
+                code = extract_html_from_response(response)
+                
+                # Validate response - retry if model failed to return HTML
+                if not code or 'unable to view' in response.lower() or '<html' not in response.lower():
+                    logger.warning(f"Module {index}: Invalid response, retrying...")
+                    response = bot.ask(PROMPT_GENERATE, module_b64, verbose=False)
+                    code = extract_html_from_response(response)
+                
+                if not code:
+                    logger.warning(f"Module {index}: No valid HTML extracted, skipping module")
+                    continue
+                    
                 code = remove_code_markers(code)
                 
                 # Render and save
