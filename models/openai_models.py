@@ -115,7 +115,7 @@ class GPT5(Bot):
         self.name = "gpt5"
         self.model = model
         self.model_version = model
-        self.max_tokens = 32000  # GPT-5 supports higher output tokens
+        self.max_completion_tokens = 32000  # GPT-5 supports higher output tokens
         
     def ask(self, question, image_encoding=None, verbose=False):
         """
@@ -148,7 +148,7 @@ class GPT5(Bot):
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[content],
-            max_tokens=self.max_tokens
+            max_completion_tokens=self.max_completion_tokens
         )
         
         # Track token usage from OpenAI response
