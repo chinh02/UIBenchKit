@@ -61,7 +61,7 @@ from utils import (
     encode_image, get_driver, take_screenshot,
     ImgSegmentation, DCGenGrid
 )
-from models import GPT4, Gemini, Claude, QwenVL, BedrockBot
+from models import GPT4, GPT5, Gemini, Claude, QwenVL, BedrockBot
 from methods.latcoder import generate_latcoder
 from dataset_manager import DatasetManager, DATASETS_CONFIG, get_dataset_manager
 from dotenv import load_dotenv
@@ -415,6 +415,18 @@ def get_bot(model_name: str):
         if not api_key:
             raise ValueError("GEMINI_API_KEY not found in environment")
         return Gemini(api_key, model=version)
+    
+    elif family == "gpt5":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            # Try DCGEN_API_KEY as fallback (OpenKey often uses one key)
+            api_key = os.getenv("DCGEN_API_KEY")
+        
+        if not api_key:
+            raise ValueError(f"OPENAI_API_KEY (for {family}) not found in environment")
+        
+        # Use GPT5 class for gpt-5.x models
+        return GPT5(api_key, model=version, base_url=OPENAI_BASE_URL)
     
     elif family in ["gpt4", "deepseek", "grok", "doubao", "kimi"]:
         api_key = os.getenv("OPENAI_API_KEY")

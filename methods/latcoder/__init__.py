@@ -23,7 +23,7 @@ from .pipeline import (
 from .blocker import blocker
 from .html2shot import html2shot
 from .scoring import get_best, mae_score, clip_similarity, verify_score
-from .prompts import PROMPT_GENERATE, PROMPT_ASSEMBLE, PROMPT_REFINE, PROMPT_GET_TEXT
+from .prompts import PROMPT_GENERATE, PROMPT_GENERATE_ELF, PROMPT_ASSEMBLE, PROMPT_REFINE, PROMPT_GET_TEXT
 from .utils import remove_code_markers, extract_html_from_response, crop_image, pil_to_base64
 
 __all__ = [
@@ -50,6 +50,7 @@ __all__ = [
     'MAX_BLOCKS_LIMIT',
     # Prompts
     'PROMPT_GENERATE',
+    'PROMPT_GENERATE_ELF',
     'PROMPT_ASSEMBLE',
     'PROMPT_REFINE',
     'PROMPT_GET_TEXT',

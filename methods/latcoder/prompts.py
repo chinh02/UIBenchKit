@@ -76,6 +76,47 @@ Based on the reference screenshot of a specific section of a webpage (such as th
 Please return the complete HTML code"""
 
 
+# Simplified prompt for models like DeepSeek-VL2 that work better with shorter prompts
+PROMPT_GENERATE_ELF = """You are an expert Tailwind developer.
+
+Based on the reference screenshot of a specific section of a webpage (such as the header, footer, card, etc.) provided by the user, build a single-page app using Tailwind, HTML, and JS. 
+Please follow the detailed requirements below to ensure the generated code is accurate:
+
+### Basic Requirements:
+                         
+1. **Rigid Requirements**
+   - You are provided with the following unmodifiable HTML framework.:
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+</head>
+<body>
+    <!-- Your task is to fill this area -->
+</body>
+</html>
+```
+2. **Appearance and Layout Consistency:**
+  
+3. **Content Consistency:**
+   - Use the exact text from the screenshot, ensuring the content of every element matches the image.
+   - For images, use placeholder images from https://placehold.co and include a detailed description in the alt text for AI-generated images.
+
+4. **No Comments **
+
+5. **Libraries to Use:**
+   - Use the following libraries:
+     - Google Fonts: Use the relevant fonts from the screenshot.
+
+### Code Format:
+
+Please return the complete HTML code without any explanations or justifications."""
+
+
 PROMPT_ASSEMBLE = """You are an experienced front-end developer tasked with assembling multiple webpage module codes into a complete webpage.
 
 # CONTEXT #

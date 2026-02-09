@@ -28,7 +28,7 @@ Usage:
 
 from .base import Bot, FakeBot
 from .google import Gemini
-from .openai_models import GPT4
+from .openai_models import GPT4, GPT5
 from .anthropic_models import Claude
 from .alibaba import QwenVL
 from .aws import BedrockBot
@@ -39,7 +39,8 @@ __all__ = [
     "FakeBot",
     # Vendor implementations
     "Gemini",
-    "GPT4", 
+    "GPT4",
+    "GPT5",
     "Claude",
     "QwenVL",
     "BedrockBot",

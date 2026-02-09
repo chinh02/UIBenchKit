@@ -67,10 +67,16 @@ MODEL_FAMILIES = {
             "o3-mini",
             "o3-mini-2025-01-31",
             "o3-2025-04-16",
+        ]
+    },
+    "gpt5": {
+        "default": "gpt-5",
+        "versions": [
             "gpt-5",
             "gpt-5-mini",
             "gpt-5.1",
-            "gpt-5.2"
+            "gpt-5.2",
+            "gpt-5-turbo",
         ]
     },
     "claude": {
