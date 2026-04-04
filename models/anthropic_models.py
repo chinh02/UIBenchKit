@@ -30,7 +30,7 @@ class Claude(Bot):
         self.model_version = model
         self.file_count = 0
         
-    def ask(self, question, image_encoding=None, verbose=False):
+    def ask(self, question, image_encoding=None, verbose=False, system_prompt=None):
         """
         Send a question to Claude and return the response.
         

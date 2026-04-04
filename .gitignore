@@ -34,6 +34,7 @@ venv.bak/
 *.swp
 *.swo
 *~
+*.code-workspace
 
 # OS
 .DS_Store
@@ -68,6 +69,10 @@ data/test.html
 *.temp
 temp/
 tmp/
+test_*.py
+*_test.py
+test_output/
+test-*.code-workspace
 
 # Data directories (datasets, demos, generated content)
 data/*
@@ -95,3 +100,5 @@ start.sh
 Tool/
 scripts/
 
+# Claude Code memory and session files
+.claude/

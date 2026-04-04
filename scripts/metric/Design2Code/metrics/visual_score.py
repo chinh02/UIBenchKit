@@ -30,7 +30,16 @@ from colormath.color_diff import delta_e_cie2000
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model, preprocess = clip.load("ViT-B/32", device=device)
+# Lazy-loaded CLIP model (deferred to avoid torch JIT issues at import time)
+_clip_model = None
+_clip_preprocess = None
+
+
+def _get_clip_model():
+    global _clip_model, _clip_preprocess
+    if _clip_model is None:
+        _clip_model, _clip_preprocess = clip.load("ViT-B/32", device=device)
+    return _clip_model, _clip_preprocess
 
 
 def calculate_similarity(block1, block2, max_distance=1.42):
@@ -372,6 +381,7 @@ def rescale_and_mask(image_path, blocks):
 
 
 def calculate_clip_similarity_with_blocks(image_path1, image_path2, blocks1, blocks2):
+    model, preprocess = _get_clip_model()
     # Load and preprocess images
     image1 = preprocess(rescale_and_mask(image_path1, [block['bbox'] for block in blocks1])).unsqueeze(0).to(device)
     image2 = preprocess(rescale_and_mask(image_path2, [block['bbox'] for block in blocks2])).unsqueeze(0).to(device)

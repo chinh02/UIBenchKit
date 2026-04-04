@@ -33,7 +33,7 @@ class Gemini(Bot):
         self.model_version = model
         self.file_count = 0
         
-    def ask(self, question, image_encoding=None, verbose=False):
+    def ask(self, question, image_encoding=None, verbose=False, system_prompt=None):
         """
         Send a question to Gemini and return the response.
         

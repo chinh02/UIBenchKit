@@ -35,7 +35,7 @@ class JudgeConfig:
     model_version: str = "gemini-2.0-flash"
     mode: JudgeMode = JudgeMode.SINGLE_SCORE
     temperature: float = 0.1
-    max_tokens: int = 2000
+    max_tokens: int = 4096
     custom_prompt: Optional[str] = None
     retry_count: int = 2
 
@@ -149,6 +149,7 @@ class MLLMJudgeEvaluator(BaseEvaluator):
         self._gemini_client = None
         self._openai_client = None
         self._anthropic_client = None
+        self._bedrock_client = None
         
         # Token tracking
         self.token_usage = {
@@ -157,23 +158,48 @@ class MLLMJudgeEvaluator(BaseEvaluator):
             "call_count": 0
         }
     
+    # OpenKey base URL for routing most models through a unified OpenAI-compatible proxy
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openkey.cloud/v1")
+    
+    # Families routed through OpenKey (OpenAI-compatible API)
+    OPENKEY_FAMILIES = {"gpt4", "gpt5", "deepseek", "grok", "doubao", "kimi"}
+    # Families that try native API first, fallback to OpenKey
+    NATIVE_WITH_OPENKEY_FALLBACK = {"claude", "qwen"}
+    # Families routed through AWS Bedrock
+    BEDROCK_FAMILIES = {"mistral", "llama"}
+    
     def initialize(self) -> None:
-        """Initialize the appropriate API client based on model family."""
+        """Initialize the appropriate API client based on model family.
+        
+        Routing follows api.py's get_bot() pattern:
+        - gemini -> native Google GenAI
+        - gpt4, gpt5, deepseek, grok, doubao, kimi -> OpenKey (OPENAI_BASE_URL)
+        - claude -> native Anthropic, fallback to OpenKey
+        - qwen -> native DashScope, fallback to OpenKey
+        - mistral, llama -> AWS Bedrock
+        """
         family = self.judge_config.model_family
         
         if family == "gemini":
             self._init_gemini()
-        elif family == "gpt4":
-            self._init_openai()
+        elif family in self.OPENKEY_FAMILIES:
+            self._init_openkey()
         elif family == "claude":
-            self._init_anthropic()
+            self._init_claude()
+        elif family == "qwen":
+            self._init_qwen()
+        elif family in self.BEDROCK_FAMILIES:
+            self._init_bedrock()
         else:
-            raise ValueError(f"Unsupported model family: {family}")
+            raise ValueError(
+                f"Unsupported model family: {family}. "
+                f"Supported: gemini, gpt4, gpt5, claude, qwen, deepseek, grok, doubao, kimi, mistral, llama"
+            )
         
         self._initialized = True
     
     def _init_gemini(self):
-        """Initialize Google Gemini client."""
+        """Initialize Google Gemini client (native API)."""
         try:
             import google.generativeai as genai
             
@@ -186,39 +212,75 @@ class MLLMJudgeEvaluator(BaseEvaluator):
         except ImportError:
             raise ImportError("Google Generative AI not installed. Run: pip install google-generativeai")
     
-    def _init_openai(self):
-        """Initialize OpenAI client."""
-        try:
-            from openai import OpenAI
-            
-            api_key = os.getenv("OPENAI_API_KEY")
-            base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-            
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY not set")
-            
-            self._openai_client = OpenAI(api_key=api_key, base_url=base_url)
-        except ImportError:
-            raise ImportError("OpenAI not installed. Run: pip install openai")
+    def _init_openkey(self):
+        """Initialize OpenAI client via OpenKey proxy (handles gpt4, gpt5, deepseek, grok, doubao, kimi)."""
+        from openai import OpenAI
+        
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DCGEN_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY or DCGEN_API_KEY not set")
+        
+        self._openai_client = OpenAI(api_key=api_key, base_url=self.OPENAI_BASE_URL)
     
-    def _init_anthropic(self):
-        """Initialize Anthropic client."""
+    def _init_claude(self):
+        """Initialize Claude: try native Anthropic first, fallback to OpenKey."""
+        # Try native Anthropic API first
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if api_key:
+            try:
+                import anthropic
+                self._anthropic_client = anthropic.Anthropic(api_key=api_key)
+                return
+            except ImportError:
+                pass  # Fall through to OpenKey
+        
+        # Fallback to OpenKey
+        from openai import OpenAI
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DCGEN_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY not set (and OPENAI_API_KEY/DCGEN_API_KEY not available for OpenKey fallback)")
+        
+        self._openai_client = OpenAI(api_key=api_key, base_url=self.OPENAI_BASE_URL)
+    
+    def _init_qwen(self):
+        """Initialize Qwen: try native DashScope first, fallback to OpenKey."""
+        # Try native Qwen/DashScope API first
+        api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+        if api_key:
+            from openai import OpenAI
+            self._openai_client = OpenAI(
+                api_key=api_key,
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+            )
+            return
+        
+        # Fallback to OpenKey
+        from openai import OpenAI
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DCGEN_API_KEY")
+        if not api_key:
+            raise ValueError("QWEN_API_KEY not set (and OPENAI_API_KEY/DCGEN_API_KEY not available for OpenKey fallback)")
+        
+        self._openai_client = OpenAI(api_key=api_key, base_url=self.OPENAI_BASE_URL)
+    
+    def _init_bedrock(self):
+        """Initialize AWS Bedrock client (for mistral, llama)."""
         try:
-            import anthropic
+            import boto3
             
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise ValueError("ANTHROPIC_API_KEY not set")
-            
-            self._anthropic_client = anthropic.Anthropic(api_key=api_key)
+            region = os.getenv("AWS_REGION", "us-east-1")
+            self._bedrock_client = boto3.client(
+                service_name="bedrock-runtime",
+                region_name=region
+            )
         except ImportError:
-            raise ImportError("Anthropic not installed. Run: pip install anthropic")
+            raise ImportError("boto3 is required for AWS Bedrock. Install with: pip install boto3")
     
     def cleanup(self) -> None:
         """Clean up resources."""
         self._gemini_client = None
         self._openai_client = None
         self._anthropic_client = None
+        self._bedrock_client = None
         self._initialized = False
     
     def _encode_image(self, image_path: str) -> tuple:
@@ -250,23 +312,82 @@ class MLLMJudgeEvaluator(BaseEvaluator):
         return DEFAULT_PROMPTS[self.judge_config.mode]
     
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
-        """Extract JSON from LLM response."""
-        # Try to find JSON in markdown code blocks
+        """Extract JSON from LLM response, handling truncated outputs."""
+        # Try to find JSON in markdown code blocks (complete)
         json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response_text)
         if json_match:
             json_str = json_match.group(1)
-        else:
-            # Try to find raw JSON
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
-            if json_match:
-                json_str = json_match.group(0)
-            else:
-                return {"raw_response": response_text, "parse_error": "No JSON found"}
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass  # Fall through to repair
         
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            return {"raw_response": response_text, "parse_error": str(e)}
+        # Try to find complete raw JSON object
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            json_str = json_match.group(0)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass  # Fall through to repair
+        
+        # Handle truncated JSON: extract key-value pairs via regex
+        # This handles cases where max_tokens cuts off the response mid-JSON
+        result = self._extract_partial_json(response_text)
+        if result:
+            return result
+        
+        return {"raw_response": response_text, "parse_error": "No JSON found"}
+    
+    def _extract_partial_json(self, text: str) -> Optional[Dict[str, Any]]:
+        """Extract key-value pairs from truncated/incomplete JSON text."""
+        result = {}
+        
+        # Extract numeric scores: "key": <number>
+        numeric_pairs = re.findall(
+            r'"(\w+)"\s*:\s*([\d]+(?:\.\d+)?)',
+            text
+        )
+        for key, value in numeric_pairs:
+            try:
+                result[key] = float(value) if '.' in value else int(value)
+            except ValueError:
+                continue
+        
+        # Extract string values: "key": "value"
+        string_pairs = re.findall(
+            r'"(\w+)"\s*:\s*"([^"]*?)"',
+            text
+        )
+        for key, value in string_pairs:
+            if key not in result:  # Don't overwrite numeric scores
+                result[key] = value
+        
+        # Extract string arrays: "key": ["item1", "item2", ...]
+        array_matches = re.finditer(
+            r'"(\w+)"\s*:\s*\[([^\]]*)',
+            text
+        )
+        for match in array_matches:
+            key = match.group(1)
+            array_content = match.group(2)
+            items = re.findall(r'"([^"]*?)"', array_content)
+            if items:
+                result[key] = items
+        
+        # Extract boolean values: "key": true/false
+        bool_pairs = re.findall(
+            r'"(\w+)"\s*:\s*(true|false)',
+            text, re.IGNORECASE
+        )
+        for key, value in bool_pairs:
+            result[key] = value.lower() == 'true'
+        
+        if result:
+            result["_partial_parse"] = True
+            return result
+        
+        return None
     
     def _call_gemini(
         self,
@@ -306,7 +427,7 @@ class MLLMJudgeEvaluator(BaseEvaluator):
         prompt: str,
         images: List[str]
     ) -> Dict[str, Any]:
-        """Call OpenAI API with images."""
+        """Call OpenAI or OpenAI-compatible API with images."""
         # Build message content with images
         content = []
         
@@ -347,11 +468,62 @@ class MLLMJudgeEvaluator(BaseEvaluator):
         
         # Track tokens
         if response.usage:
-            self.token_usage["total_prompt_tokens"] += response.usage.prompt_tokens
-            self.token_usage["total_response_tokens"] += response.usage.completion_tokens
+            self.token_usage["total_prompt_tokens"] += response.usage.prompt_tokens or 0
+            self.token_usage["total_response_tokens"] += response.usage.completion_tokens or 0
         self.token_usage["call_count"] += 1
         
         return self._parse_json_response(response.choices[0].message.content)
+    
+    def _call_bedrock(
+        self,
+        prompt: str,
+        images: List[str]
+    ) -> Dict[str, Any]:
+        """Call AWS Bedrock API with images."""
+        import base64 as b64
+        
+        # Build content blocks for Converse API
+        content = []
+        
+        for img_path in images:
+            with open(img_path, 'rb') as f:
+                image_bytes = f.read()
+            ext = os.path.splitext(img_path)[1].lower()
+            fmt_map = {'.png': 'png', '.jpg': 'jpeg', '.jpeg': 'jpeg', '.gif': 'gif', '.webp': 'webp'}
+            content.append({
+                "image": {
+                    "format": fmt_map.get(ext, 'png'),
+                    "source": {"bytes": image_bytes}
+                }
+            })
+        
+        content.append({"text": prompt})
+        
+        messages = [{"role": "user", "content": content}]
+        
+        response = self._bedrock_client.converse(
+            modelId=self.judge_config.model_version,
+            messages=messages,
+            inferenceConfig={
+                "maxTokens": self.judge_config.max_tokens,
+                "temperature": self.judge_config.temperature
+            }
+        )
+        
+        # Extract response text
+        response_text = ""
+        if "output" in response and "message" in response["output"]:
+            for block in response["output"]["message"].get("content", []):
+                if "text" in block:
+                    response_text += block["text"]
+        
+        # Track tokens
+        usage = response.get("usage", {})
+        self.token_usage["total_prompt_tokens"] += usage.get("inputTokens", 0)
+        self.token_usage["total_response_tokens"] += usage.get("outputTokens", 0)
+        self.token_usage["call_count"] += 1
+        
+        return self._parse_json_response(response_text)
     
     def _call_anthropic(
         self,
@@ -403,12 +575,16 @@ class MLLMJudgeEvaluator(BaseEvaluator):
             try:
                 if family == "gemini":
                     return self._call_gemini(prompt, images)
-                elif family == "gpt4":
-                    return self._call_openai(prompt, images)
-                elif family == "claude":
+                elif family in self.BEDROCK_FAMILIES:
+                    return self._call_bedrock(prompt, images)
+                elif family == "claude" and self._anthropic_client:
+                    # Native Anthropic API
                     return self._call_anthropic(prompt, images)
                 else:
-                    raise ValueError(f"Unsupported model family: {family}")
+                    # Everything else goes through OpenKey (OpenAI-compatible)
+                    # Including: gpt4, gpt5, deepseek, grok, doubao, kimi, qwen,
+                    # and claude/qwen fallback when native API key is not available
+                    return self._call_openai(prompt, images)
             except Exception as e:
                 if attempt == self.judge_config.retry_count:
                     raise

@@ -31,37 +31,40 @@ class GPT4(Bot):
         self.model_version = model
         self.max_tokens = 10000
         
-    def ask(self, question, image_encoding=None, verbose=False):
+    def ask(self, question, image_encoding=None, verbose=False, system_prompt=None):
         """
         Send a question to OpenAI and return the response.
-        
+
         Args:
             question: The text prompt
             image_encoding: Base64 encoded image (optional)
             verbose: Whether to print debug information
-            
+            system_prompt: Optional system message (sent as a separate system role)
+
         Returns:
             The model's text response
         """
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+
         if image_encoding:
-            content = {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": question},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{image_encoding}",
-                        },
+            user_content = [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{image_encoding}",
                     },
-                ],
-            }
+                },
+                {"type": "text", "text": question},
+            ]
+            messages.append({"role": "user", "content": user_content})
         else:
-            content = {"role": "user", "content": question}
-        
+            messages.append({"role": "user", "content": question})
+
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[content],
+            messages=messages,
             max_tokens=self.max_tokens,
             temperature=0.2,
             seed=42,
@@ -117,37 +120,40 @@ class GPT5(Bot):
         self.model_version = model
         self.max_completion_tokens = 32000  # GPT-5 supports higher output tokens
         
-    def ask(self, question, image_encoding=None, verbose=False):
+    def ask(self, question, image_encoding=None, verbose=False, system_prompt=None):
         """
         Send a question to OpenAI GPT-5 and return the response.
-        
+
         Args:
             question: The text prompt
             image_encoding: Base64 encoded image (optional)
             verbose: Whether to print debug information
-            
+            system_prompt: Optional system message (sent as a separate system role)
+
         Returns:
             The model's text response
         """
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+
         if image_encoding:
-            content = {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": question},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{image_encoding}",
-                        },
+            user_content = [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{image_encoding}",
                     },
-                ],
-            }
+                },
+                {"type": "text", "text": question},
+            ]
+            messages.append({"role": "user", "content": user_content})
         else:
-            content = {"role": "user", "content": question}
-        
+            messages.append({"role": "user", "content": question})
+
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[content],
+            messages=messages,
             max_completion_tokens=self.max_completion_tokens
         )
         

@@ -59,7 +59,7 @@ class BedrockBot(Bot):
         except Exception as e:
             raise ValueError(f"Failed to initialize Bedrock client: {e}")
     
-    def ask(self, question, image_encoding=None, verbose=False):
+    def ask(self, question, image_encoding=None, verbose=False, system_prompt=None):
         """
         Send a request to AWS Bedrock.
         

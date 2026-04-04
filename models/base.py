@@ -43,8 +43,17 @@ class Bot(ABC):
         self.token_log = []
     
     @abstractmethod
-    def ask(self, question, image_encoding=None, verbose=False):
-        """Send a question to the model and return the response."""
+    def ask(self, question, image_encoding=None, verbose=False, system_prompt=None):
+        """Send a question to the model and return the response.
+
+        Args:
+            question: The text prompt (user message content)
+            image_encoding: Base64 encoded image (optional)
+            verbose: Whether to print debug information
+            system_prompt: Optional system message sent before the user message.
+                          When provided, question is sent as user text alongside the image,
+                          and system_prompt is sent as a separate system role message.
+        """
         raise NotImplementedError
     
     def get_token_usage(self):
@@ -219,6 +228,6 @@ class FakeBot(Bot):
         self.call_count = 0
         self.token_log = []
         
-    def ask(self, question, image_encoding=None, verbose=False):
+    def ask(self, question, image_encoding=None, verbose=False, system_prompt=None):
         print(question)
         return f"```html \nxxxxxxxxxxxxxxxxxxx\n```"

@@ -53,7 +53,7 @@ if FINE_GRAINED_METRICS_AVAILABLE:
     try:
         from Design2Code.metrics.visual_score import visual_eval_v3_multi
         print("[DCGen] Fine-grained metrics (Design2Code) loaded successfully")
-    except ImportError as e:
+    except (ImportError, RuntimeError, Exception) as e:
         FINE_GRAINED_METRICS_AVAILABLE = False
         print(f"[DCGen] Fine-grained metrics not available: {e}")
 
@@ -63,6 +63,8 @@ from utils import (
 )
 from models import GPT4, GPT5, Gemini, Claude, QwenVL, BedrockBot
 from methods.latcoder import generate_latcoder
+from methods.uicopilot import generate_uicopilot
+from methods.layoutcoder import generate_layoutcoder
 from dataset_manager import DatasetManager, DATASETS_CONFIG, get_dataset_manager
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -111,7 +113,7 @@ API_KEYS[DEFAULT_API_KEY] = {"email": "dev@localhost", "verified": True, "create
 
 # Model families and their supported versions are imported from config.py
 
-SUPPORTED_METHODS = ["dcgen", "direct", "latcoder"]
+SUPPORTED_METHODS = ["dcgen", "direct", "latcoder", "uicopilot", "layoutcoder"]
 SUPPORTED_DATASETS = list(DATASETS_CONFIG.keys())  # ["design2code", "dcgen"]
 
 # ============================================================
@@ -155,8 +157,9 @@ class Run:
     RESULTS_FILE = "results.json"
     COST_REPORT_FILE = "cost_report.json"
     
-    def __init__(self, run_id: str, model: str, method: str, input_dir: str, api_key: str, 
-                 dataset: str = None, sample_ids: list = None):
+    def __init__(self, run_id: str, model: str, method: str, input_dir: str, api_key: str,
+                 dataset: str = None, sample_ids: list = None,
+                 user_api_key: str = None, user_base_url: str = None):
         self.run_id = run_id
         self.model = model
         self.method = method
@@ -165,6 +168,8 @@ class Run:
         self.api_key = api_key
         self.dataset = dataset  # Dataset name (design2code, dcgen, or None for custom)
         self.sample_ids = sample_ids  # Specific sample IDs to run (None = all)
+        self.user_api_key = user_api_key  # User-provided API key (overrides env)
+        self.user_base_url = user_base_url  # User-provided base URL (overrides env)
         self.status = "pending"  # pending, running, completed, failed
         self.created_at = datetime.datetime.now().isoformat()
         self.completed_at = None
@@ -341,6 +346,7 @@ class Run:
         completed = [k for k, v in self.instances.items() if v.get("status") == "completed"]
         pending = [k for k, v in self.instances.items() if v.get("status") == "pending"]
         failed = [k for k, v in self.instances.items() if v.get("status") == "failed"]
+        failed_details = {k: v.get("error", "Unknown error") for k, v in self.instances.items() if v.get("status") == "failed"}
         result = {
             "run_id": self.run_id,
             "status": self.status,
@@ -350,7 +356,8 @@ class Run:
             "running": running,
             "completed": completed,
             "pending": pending,
-            "failed": failed
+            "failed": failed,
+            "failed_details": failed_details
         }
         # Include evaluation and cost when run is completed
         if self.status == "completed":
@@ -399,75 +406,91 @@ def require_api_key(f):
 # Custom OpenAI-compatible API base URL (set via env var or default)
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openkey.cloud/v1")
 
-def get_bot(model_name: str):
+def get_bot(model_name: str, user_api_key: str = None, user_base_url: str = None):
     """
     Initialize the specified model.
-    
+
     Accepts both family names (gemini, gpt4, claude, qwen, deepseek, etc.) and specific versions.
+
+    Args:
+        model_name: Model family or specific version string.
+        user_api_key: Optional user-provided API key (overrides environment variables).
+        user_base_url: Optional user-provided base URL (overrides OPENAI_BASE_URL).
     """
     family, version = get_model_info(model_name)
-    
+    base_url = user_base_url or OPENAI_BASE_URL
+
     if not family:
         raise ValueError(f"Unknown model: {model_name}. Supported families: {', '.join(SUPPORTED_MODELS)}")
-    
+
     if family == "gemini":
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = user_api_key or os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GEMINI_API_KEY not found in environment")
+            raise ValueError("GEMINI_API_KEY not found. Please provide an API key.")
         return Gemini(api_key, model=version)
-    
+
     elif family == "gpt5":
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = user_api_key or os.getenv("OPENAI_API_KEY") or os.getenv("DCGEN_API_KEY")
+
         if not api_key:
-            # Try DCGEN_API_KEY as fallback (OpenKey often uses one key)
-            api_key = os.getenv("DCGEN_API_KEY")
-        
-        if not api_key:
-            raise ValueError(f"OPENAI_API_KEY (for {family}) not found in environment")
-        
+            raise ValueError(f"OPENAI_API_KEY (for {family}) not found. Please provide an API key.")
+
         # Use GPT5 class for gpt-5.x models
-        return GPT5(api_key, model=version, base_url=OPENAI_BASE_URL)
-    
+        return GPT5(api_key, model=version, base_url=base_url)
+
     elif family in ["gpt4", "deepseek", "grok", "doubao", "kimi"]:
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = user_api_key or os.getenv("OPENAI_API_KEY") or os.getenv("DCGEN_API_KEY")
+
         if not api_key:
-             # Try DCGEN_API_KEY as fallback (OpenKey often uses one key)
-             api_key = os.getenv("DCGEN_API_KEY")
-        
-        if not api_key:
-            raise ValueError(f"OPENAI_API_KEY (for {family}) not found in environment")
-        
+            raise ValueError(f"OPENAI_API_KEY (for {family}) not found. Please provide an API key.")
+
         # Use OpenKey compatible setup
-        return GPT4(api_key, model=version, base_url=OPENAI_BASE_URL)
-    
+        return GPT4(api_key, model=version, base_url=base_url)
+
     elif family == "claude":
+        # User-provided key: use directly
+        if user_api_key:
+            if user_base_url:
+                # User provided both key + custom base URL → OpenAI-compatible
+                return GPT4(user_api_key, model=version, base_url=base_url)
+            else:
+                # User provided key only → assume native Anthropic
+                return Claude(user_api_key, model=version)
+
         # Check native key first
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if api_key:
             return Claude(api_key, model=version)
-        
+
         # Fallback to OpenKey
         api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DCGEN_API_KEY")
-        if api_key and ("openkey" in OPENAI_BASE_URL or "api.openai.com" not in OPENAI_BASE_URL):
+        if api_key and ("openkey" in base_url or "api.openai.com" not in base_url):
             print(f"Initializing {family} model ({version}) via OpenKey API")
-            return GPT4(api_key, model=version, base_url=OPENAI_BASE_URL)
-            
-        raise ValueError("ANTHROPIC_API_KEY not found (and fallback to OpenKey failed)")
-    
+            return GPT4(api_key, model=version, base_url=base_url)
+
+        raise ValueError("ANTHROPIC_API_KEY not found. Please provide an API key.")
+
     elif family == "qwen":
+        # User-provided key
+        if user_api_key:
+            if user_base_url:
+                return GPT4(user_api_key, model=version, base_url=base_url)
+            else:
+                return QwenVL(user_api_key, model=version)
+
         # Check native key first
         api_key = os.getenv("QWEN_API_KEY")
         if api_key:
             return QwenVL(api_key, model=version)
-        
+
         # Fallback to OpenKey
         api_key = os.getenv("OPENAI_API_KEY") or os.getenv("DCGEN_API_KEY")
-        if api_key and ("openkey" in OPENAI_BASE_URL or "api.openai.com" not in OPENAI_BASE_URL):
+        if api_key and ("openkey" in base_url or "api.openai.com" not in base_url):
             print(f"Initializing {family} model ({version}) via OpenKey API")
-            return GPT4(api_key, model=version, base_url=OPENAI_BASE_URL)
-            
-        raise ValueError("QWEN_API_KEY not found (and fallback to OpenKey failed)")
-    
+            return GPT4(api_key, model=version, base_url=base_url)
+
+        raise ValueError("QWEN_API_KEY not found. Please provide an API key.")
+
     elif family in ["mistral", "llama"]:
         # AWS Bedrock models - credentials from AWS CLI config or environment
         # Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or IAM role)
@@ -475,7 +498,7 @@ def get_bot(model_name: str):
         region = os.getenv("AWS_REGION", "us-east-1")
         print(f"Initializing {family} model ({version}) via AWS Bedrock in region {region}")
         return BedrockBot(model_id=version, region_name=region)
-    
+
     else:
         raise ValueError(f"Unknown model family: {family}")
 
@@ -619,8 +642,8 @@ def run_experiment_task(run: Run):
         # Save initial state (fault tolerance - saves the plan)
         run.save_to_disk()
         
-        # Initialize bot
-        bot = get_bot(run.model)
+        # Initialize bot (use user-provided credentials if available)
+        bot = get_bot(run.model, user_api_key=run.user_api_key, user_base_url=run.user_base_url)
         if hasattr(bot, 'reset_token_usage'):
             bot.reset_token_usage()
         
@@ -638,6 +661,10 @@ def run_experiment_task(run: Run):
                     generate_dcgen(bot, img_path, save_path, SEG_PARAMS_DEFAULT)
                 elif run.method == "latcoder":
                     generate_latcoder(bot, img_path, save_path)
+                elif run.method == "uicopilot":
+                    generate_uicopilot(bot, img_path, save_path)
+                elif run.method == "layoutcoder":
+                    generate_layoutcoder(bot, img_path, save_path)
                 else:
                     generate_single(PROMPT_DIRECT, bot, img_path, save_path)
                 
@@ -1103,6 +1130,8 @@ def submit():
     model_input = data["model"]
     method = data["method"].lower()
     dataset_name = data.get("dataset")
+    user_api_key = data.get("user_api_key")  # Optional user-provided API key
+    user_base_url = data.get("user_base_url")  # Optional user-provided base URL
     sample_ids = data.get("sample_ids")
     
     # Parse model family and version
@@ -1167,13 +1196,15 @@ def submit():
             })
     
     # Create run with model version
-    run = Run(run_id, model_version, method, input_dir, g.api_key, dataset=dataset_name, sample_ids=sample_ids)
+    run = Run(run_id, model_version, method, input_dir, g.api_key,
+              dataset=dataset_name, sample_ids=sample_ids,
+              user_api_key=user_api_key, user_base_url=user_base_url)
     RUNS_DB[run_id] = run
-    
+
     # Start background task
     thread = Thread(target=run_experiment_task, args=(run,))
     thread.start()
-    
+
     return jsonify({
         "message": f"Run {run_id} submitted successfully",
         "launched": True,
@@ -1273,6 +1304,7 @@ def get_report():
                 instance_id: {
                     "status": inst.get("status"),
                     "output_file": inst.get("result"),
+                    "error": inst.get("error"),
                     "dataset": run.dataset,
                     "method": run.method,
                     "model": run.model
@@ -1614,25 +1646,31 @@ def resume_run():
                 try:
                     if run.method == "dcgen":
                         generate_dcgen(bot, img_path, save_path, SEG_PARAMS_DEFAULT)
+                    elif run.method == "latcoder":
+                        generate_latcoder(bot, img_path, save_path)
+                    elif run.method == "uicopilot":
+                        generate_uicopilot(bot, img_path, save_path)
+                    elif run.method == "layoutcoder":
+                        generate_layoutcoder(bot, img_path, save_path)
                     else:
                         generate_single(PROMPT_DIRECT, bot, img_path, save_path)
-                    
+
                     run.instances[instance_id]["status"] = "completed"
                     run.instances[instance_id]["result"] = save_path
-                    
+
                 except Exception as e:
                     run.instances[instance_id]["status"] = "failed"
                     run.instances[instance_id]["error"] = str(e)
-            
+
             # Copy placeholder if not exists
             placeholder_src = os.path.join(run.input_dir, "placeholder.png")
             placeholder_dst = os.path.join(run.output_dir, "placeholder.png")
             if os.path.exists(placeholder_src) and not os.path.exists(placeholder_dst):
                 shutil.copy(placeholder_src, placeholder_dst)
-            
+
             # Take screenshots
             take_screenshots_task(run.output_dir, replace=False)
-            
+
             # Update token usage
             if hasattr(bot, 'print_token_usage'):
                 new_usage = bot.print_token_usage(f"{run.method}_resume")
@@ -1743,27 +1781,33 @@ def retry_failed():
                 try:
                     if run.method == "dcgen":
                         generate_dcgen(bot, img_path, save_path, SEG_PARAMS_DEFAULT)
+                    elif run.method == "latcoder":
+                        generate_latcoder(bot, img_path, save_path)
+                    elif run.method == "uicopilot":
+                        generate_uicopilot(bot, img_path, save_path)
+                    elif run.method == "layoutcoder":
+                        generate_layoutcoder(bot, img_path, save_path)
                     else:
                         generate_single(PROMPT_DIRECT, bot, img_path, save_path)
-                    
+
                     run.instances[instance_id]["status"] = "completed"
                     run.instances[instance_id]["result"] = save_path
                     run.instances[instance_id]["error"] = None
                     retry_count += 1
-                    
+
                 except Exception as e:
                     run.instances[instance_id]["status"] = "failed"
                     run.instances[instance_id]["error"] = str(e)
-            
+
             # Copy placeholder if not exists
             placeholder_src = os.path.join(run.input_dir, "placeholder.png")
             placeholder_dst = os.path.join(run.output_dir, "placeholder.png")
             if os.path.exists(placeholder_src) and not os.path.exists(placeholder_dst):
                 shutil.copy(placeholder_src, placeholder_dst)
-            
+
             # Take screenshots for newly completed instances
             take_screenshots_task(run.output_dir, replace=False)
-            
+
             # Update token usage
             if hasattr(bot, 'print_token_usage'):
                 new_usage = bot.print_token_usage(f"{run.method}_retry")
@@ -1900,7 +1944,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="DCGen API Server")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=9999, help="Port to bind (default: 5000)")
+    parser.add_argument("--port", type=int, default=5000, help="Port to bind (default: 5000)")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     
     args = parser.parse_args()

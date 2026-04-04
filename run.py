@@ -41,6 +41,7 @@ from utils import (
     ImgSegmentation, DCGenGrid
 )
 from models import GPT4, Gemini, Claude, QwenVL
+from methods.uicopilot import generate_uicopilot
 from dotenv import load_dotenv
 from tqdm import tqdm
 from threading import Thread
@@ -192,6 +193,8 @@ def run_experiment(bot, input_dir: str, output_dir: str, method: str = "dcgen",
         try:
             if method == "dcgen":
                 generate_dcgen(bot, img_path, save_path, seg_params)
+            elif method == "uicopilot":
+                generate_uicopilot(bot, img_path, save_path)
             else:  # direct
                 generate_single(PROMPT_DIRECT, bot, img_path, save_path)
                 print(f"  Direct: {filename}")
@@ -532,7 +535,7 @@ def main():
                            help="Model to use")
     exp_parser.add_argument("--input", "-i", required=True, help="Input directory with PNG images")
     exp_parser.add_argument("--output", "-o", required=True, help="Output directory for HTML files")
-    exp_parser.add_argument("--method", choices=["dcgen", "direct"], default="dcgen",
+    exp_parser.add_argument("--method", choices=["dcgen", "direct", "uicopilot"], default="dcgen",
                            help="Generation method (default: dcgen)")
     exp_parser.add_argument("--force", "-f", action="store_true", 
                            help="Force regeneration of existing files")
