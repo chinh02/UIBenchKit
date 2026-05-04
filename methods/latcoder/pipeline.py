@@ -374,7 +374,7 @@ def pipeline(bot, design_image: Image.Image, artifacts_dir: Path = None,
 
 
 # ============================================================
-# DCGen API Integration
+# UIBenchKit API Integration
 # ============================================================
 def generate_latcoder(bot, img_path: str, save_path: str = None,
                       generate_samples: int = 1, assembly_samples: int = 1,
@@ -383,7 +383,7 @@ def generate_latcoder(bot, img_path: str, save_path: str = None,
     Generate HTML from image using LatCoder method.
     
     This function matches the signature of generate_dcgen() and generate_single()
-    for easy integration with the DCGen API.
+    for easy integration with the UIBenchKit API.
     
     Args:
         bot: DCGen bot instance
@@ -430,3 +430,4 @@ def generate_latcoder(bot, img_path: str, save_path: str = None,
             pred_img.save(str(png_path))
     
     return html_code
+

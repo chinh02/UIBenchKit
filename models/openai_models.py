@@ -30,6 +30,28 @@ class GPT4(Bot):
         self.model = model
         self.model_version = model
         self.max_tokens = 10000
+
+    @staticmethod
+    def _is_reasoning_like_model(model_name: str) -> bool:
+        model_name = (model_name or "").lower()
+        return model_name.startswith(("o1", "o3", "o4", "gpt-5"))
+
+    def _build_chat_kwargs(self, messages):
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+        }
+        # Some model families/upstream providers reject temperature/seed.
+        if not self._is_reasoning_like_model(self.model):
+            kwargs["temperature"] = 0.2
+            kwargs["seed"] = 42
+        return kwargs
+
+    @staticmethod
+    def _is_client_error(error: Exception) -> bool:
+        status_code = getattr(error, "status_code", None)
+        return isinstance(status_code, int) and 400 <= status_code < 500 and status_code != 429
         
     def ask(self, question, image_encoding=None, verbose=False, system_prompt=None):
         """
@@ -62,13 +84,26 @@ class GPT4(Bot):
         else:
             messages.append({"role": "user", "content": question})
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            max_tokens=self.max_tokens,
-            temperature=0.2,
-            seed=42,
-        )
+        request_kwargs = self._build_chat_kwargs(messages)
+        try:
+            response = self.client.chat.completions.create(**request_kwargs)
+        except Exception as error:
+            # Compatibility fallback for OpenAI-compatible proxies that reject optional params.
+            if self._is_client_error(error):
+                fallback_kwargs = dict(request_kwargs)
+                changed = False
+                if "seed" in fallback_kwargs:
+                    fallback_kwargs.pop("seed")
+                    changed = True
+                if self._is_reasoning_like_model(self.model) and "temperature" in fallback_kwargs:
+                    fallback_kwargs.pop("temperature")
+                    changed = True
+                if changed:
+                    response = self.client.chat.completions.create(**fallback_kwargs)
+                else:
+                    raise
+            else:
+                raise
         
         # Track token usage from OpenAI response
         if hasattr(response, 'usage') and response.usage:
@@ -119,6 +154,11 @@ class GPT5(Bot):
         self.model = model
         self.model_version = model
         self.max_completion_tokens = 32000  # GPT-5 supports higher output tokens
+
+    @staticmethod
+    def _is_client_error(error: Exception) -> bool:
+        status_code = getattr(error, "status_code", None)
+        return isinstance(status_code, int) and 400 <= status_code < 500 and status_code != 429
         
     def ask(self, question, image_encoding=None, verbose=False, system_prompt=None):
         """
@@ -151,11 +191,24 @@ class GPT5(Bot):
         else:
             messages.append({"role": "user", "content": question})
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            max_completion_tokens=self.max_completion_tokens
-        )
+        request_kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "max_completion_tokens": self.max_completion_tokens,
+        }
+        try:
+            response = self.client.chat.completions.create(**request_kwargs)
+        except Exception as error:
+            # Compatibility fallback for providers that only accept max_tokens.
+            if self._is_client_error(error):
+                fallback_kwargs = {
+                    "model": self.model,
+                    "messages": messages,
+                    "max_tokens": self.max_completion_tokens,
+                }
+                response = self.client.chat.completions.create(**fallback_kwargs)
+            else:
+                raise
         
         # Track token usage from OpenAI response
         if hasattr(response, 'usage') and response.usage:

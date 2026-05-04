@@ -1,14 +1,18 @@
-import os
 from tqdm import tqdm
 from PIL import Image, ImageDraw
-from datasets import load_dataset
-from PIL import Image, ImageDraw
-from PIL import Image, ImageDraw
 import numpy as np
-import json
-import easyocr
-import cv2
-import torch
+
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
+try:
+    import easyocr
+except Exception:
+    easyocr = None
+
+_EASYOCR_READER = None
 
 def blocker(image):
     for i in tqdm(range(0,1)):
@@ -397,16 +401,25 @@ def merge_bboxs(results, threshold=50):
             return results
 
 def ocr_with_easyocr(pil_image, lang_list=['en', 'ch_sim'], merge_threshold=50):
-    reader = easyocr.Reader(lang_list, gpu=False)  # 设置 GPU=False 以使用 CPU
+    global _EASYOCR_READER
+
+    if easyocr is None:
+        return [], pil_image.copy()
+
+    if _EASYOCR_READER is None:
+        _EASYOCR_READER = easyocr.Reader(lang_list, gpu=False)
 
     # 将 PIL.Image 转换为 numpy 数组
     image_np = np.array(pil_image)
 
     # 使用 easyocr 识别文本
-    results = reader.readtext(image_np)
+    results = _EASYOCR_READER.readtext(image_np)
 
     # 迭代合并临近的边界框
     results = merge_bboxs(results, threshold=merge_threshold)
+
+    if cv2 is None:
+        return results, pil_image.copy()
 
     # 绘制合并后的边界框
     for item in results:

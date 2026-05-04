@@ -81,7 +81,6 @@ data/*
 # Results and reports (generated data)
 results/
 dcgen-reports/
-mllm-judge-reports/
 token_comparison.json
 token_usage.json
 

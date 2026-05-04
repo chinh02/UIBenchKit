@@ -1,30 +1,15 @@
 #!/usr/bin/env python3
 """
-DCGen Routes Package
-====================
-
-Flask route blueprints for the DCGen API.
+Route blueprint factories.
 """
 
-from flask import Blueprint
-
-# Import all blueprints
-from .auth import auth_bp
-from .datasets import datasets_bp
-from .runs import runs_bp
-from .evaluation import evaluation_bp
+from .auth import create_auth_blueprint
+from .datasets import create_datasets_blueprint
+from .runs import create_runs_blueprint
 
 __all__ = [
-    'auth_bp',
-    'datasets_bp',
-    'runs_bp',
-    'evaluation_bp',
+    "create_auth_blueprint",
+    "create_datasets_blueprint",
+    "create_runs_blueprint",
 ]
 
-
-def register_all_blueprints(app):
-    """Register all blueprints with a Flask app."""
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(datasets_bp)
-    app.register_blueprint(runs_bp)
-    app.register_blueprint(evaluation_bp)

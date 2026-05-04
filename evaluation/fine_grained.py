@@ -11,6 +11,7 @@ import os
 import sys
 import gc
 import traceback
+import numpy as np
 from typing import Dict, Any, Optional, List
 import contextlib
 import joblib
@@ -95,6 +96,11 @@ class FineGrainedEvaluator(BaseEvaluator):
         """Add Design2Code to path and import evaluation function."""
         if self.metrics_path not in sys.path:
             sys.path.insert(0, self.metrics_path)
+
+        # Design2Code's metric dependencies still call np.asscalar through
+        # colormath on newer NumPy versions.
+        if not hasattr(np, "asscalar"):
+            np.asscalar = lambda value: value.item()
         
         try:
             from Design2Code.metrics.visual_score import visual_eval_v3_multi
@@ -158,8 +164,11 @@ class FineGrainedEvaluator(BaseEvaluator):
             # Change CWD to Design2Code directory so it can find its scripts (metrics/screenshot_single.py)
             d2c_path = os.path.join(self.metrics_path, "Design2Code")
             cwd = os.getcwd()
+            old_path = os.environ.get("PATH", "")
+            python_dir = os.path.dirname(sys.executable)
             
             try:
+                os.environ["PATH"] = python_dir + os.pathsep + old_path
                 if os.path.exists(d2c_path):
                     os.chdir(d2c_path)
                 
@@ -168,6 +177,7 @@ class FineGrainedEvaluator(BaseEvaluator):
                 results = self._visual_eval_func(input_list)
             finally:
                 os.chdir(cwd)
+                os.environ["PATH"] = old_path
                 # Force garbage collection after each sample to reduce memory pressure
                 gc.collect()
             
@@ -284,10 +294,10 @@ class FineGrainedEvaluator(BaseEvaluator):
         # Run evaluations
         if eval_tasks:
             # Default to 1 worker for stability (each worker loads CLIP + spawns browser)
-            # Can be overridden with DCGEN_FINE_GRAINED_WORKERS env var
+            # Can be overridden with UIBENCHKIT_FINE_GRAINED_WORKERS env var
             # Setting to 1 avoids OOM issues from multiple CLIP models + browsers
             default_workers = 1
-            n_jobs = int(os.environ.get('DCGEN_FINE_GRAINED_WORKERS', default_workers))
+            n_jobs = int(os.environ.get('UIBENCHKIT_FINE_GRAINED_WORKERS', default_workers))
             n_jobs = min(n_jobs, len(eval_tasks))
             
             # Check available memory - if low, force sequential

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Dataset Manager for DCGen
+Dataset Manager for UIBenchKit
 =========================
 
 Manages downloading and accessing datasets from Hugging Face for benchmarking.
@@ -45,7 +45,7 @@ DATASETS_CONFIG = {
     },
     "dcgen": {
         "hf_repo": "iforgott/DCGen",
-        "description": "461 experiment images with HTML for DCGen benchmarking",
+        "description": "461 experiment images with HTML for the DCGen benchmark",
         "image_column": "image",
         "html_column": "html",  # Use full_data folder which has HTML files
         "split": "train",
@@ -479,7 +479,7 @@ class DatasetManager:
                               sample_ids: List[str] = None) -> str:
         """
         Prepare a benchmark directory from a dataset.
-        Creates a directory structure compatible with the DCGen experiment runner.
+        Creates a directory structure compatible with the UIBenchKit run pipeline.
         
         Args:
             dataset_name: Name of the dataset
@@ -556,7 +556,7 @@ if __name__ == "__main__":
     # CLI interface for dataset management
     import argparse
     
-    parser = argparse.ArgumentParser(description="DCGen Dataset Manager")
+    parser = argparse.ArgumentParser(description="UIBenchKit Dataset Manager")
     subparsers = parser.add_subparsers(dest="command")
     
     # List command

@@ -8,6 +8,7 @@ Matches original latcoder implementation exactly.
 
 import logging
 from typing import List, Tuple
+import importlib.util
 from PIL import Image
 import numpy as np
 import torch
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 # Global CLIP model cache (matches original)
 CLIP_MODEL = None
 CLIP_PREPROCESS = None
+CLIP_BACKEND = None
+_CLIP_DISABLED_REASON = None
 
 
 def process_imgs(image1: Image.Image, image2: Image.Image, max_size: int = 512):
@@ -76,11 +79,42 @@ def clip_encode(ims: list, device: str = 'cuda'):
     Encode images using CLIP.
     Matches original latcoder/evaluation/metrics.py
     """
-    global CLIP_MODEL, CLIP_PREPROCESS
-    import clip
+    global CLIP_MODEL, CLIP_PREPROCESS, CLIP_BACKEND, _CLIP_DISABLED_REASON
     
     if CLIP_MODEL is None:
-        CLIP_MODEL, CLIP_PREPROCESS = clip.load("ViT-B/32", device=device)
+        # Backend 1: OpenAI CLIP package (module name: clip)
+        if importlib.util.find_spec("clip") is not None:
+            try:
+                import clip
+
+                CLIP_MODEL, CLIP_PREPROCESS = clip.load("ViT-B/32", device=device)
+                CLIP_BACKEND = "clip"
+            except Exception as error:
+                logger.warning(f"Failed to initialize OpenAI CLIP backend: {error}")
+
+        # Backend 2: open_clip_torch package (module name: open_clip)
+        if CLIP_MODEL is None and importlib.util.find_spec("open_clip") is not None:
+            try:
+                import open_clip
+
+                model, _, preprocess = open_clip.create_model_and_transforms(
+                    "ViT-B-32",
+                    pretrained="openai",
+                    device=device,
+                )
+                model.eval()
+                CLIP_MODEL = model
+                CLIP_PREPROCESS = preprocess
+                CLIP_BACKEND = "open_clip"
+            except Exception as error:
+                logger.warning(f"Failed to initialize open_clip backend: {error}")
+
+        if CLIP_MODEL is None:
+            _CLIP_DISABLED_REASON = (
+                "Neither OpenAI CLIP ('clip') nor open_clip ('open_clip_torch') "
+                "is usable in this environment."
+            )
+            raise RuntimeError(_CLIP_DISABLED_REASON)
     
     with torch.no_grad():
         img_tmps = torch.stack([CLIP_PREPROCESS(im) for im in ims]).to(device)
@@ -104,6 +138,14 @@ def clip_similarity(img1: Image.Image, img2: Image.Image, device: str = 'cuda') 
     return torch.nn.functional.cosine_similarity(feas[0], feas[1], dim=0).item()
 
 
+def mae_only_score(mae: float) -> float:
+    """
+    Fallback score when CLIP is unavailable.
+    Higher is better, normalized to roughly [0, 1].
+    """
+    return max(0.0, 1.0 - (mae / 255.0))
+
+
 def verify_score(mae: float, clip_sim: float, weights: Tuple[float, float] = (0.5, 0.5)) -> float:
     """Compute composite similarity score from MAE and CLIP."""
     w1, w2 = weights
@@ -114,7 +156,11 @@ def verify_score(mae: float, clip_sim: float, weights: Tuple[float, float] = (0.
 def evaluate_images(ref_img: Image.Image, cand_img: Image.Image) -> Tuple[float, float]:
     """Evaluate candidate image against reference."""
     mae = mae_score(ref_img, cand_img)
-    clip = clip_similarity(ref_img, cand_img)
+    clip = None
+    try:
+        clip = clip_similarity(ref_img, cand_img)
+    except Exception as error:
+        logger.warning(f"CLIP similarity unavailable, falling back to MAE-only scoring: {error}")
     return mae, clip
 
 
@@ -129,11 +175,16 @@ def get_best(ref_img: Image.Image, cand_imgs: List[Image.Image]) -> Tuple[int, L
         scores_data['MAE'].append(mae)
         scores_data['CLIP'].append(clip)
     
-    weights = (0.5, 0.5)
-    final_scores = [
-        verify_score(scores_data['MAE'][i], scores_data['CLIP'][i], weights)
-        for i in range(len(cand_imgs))
-    ]
+    # If CLIP failed for any candidate, use MAE-only scoring for consistent ranking.
+    if any(score is None for score in scores_data['CLIP']):
+        final_scores = [mae_only_score(mae) for mae in scores_data['MAE']]
+        logger.info("Using MAE-only ranking because CLIP is unavailable.")
+    else:
+        weights = (0.5, 0.5)
+        final_scores = [
+            verify_score(scores_data['MAE'][i], scores_data['CLIP'][i], weights)
+            for i in range(len(cand_imgs))
+        ]
     
     logger.info(f"Candidate scores: {final_scores}")
     best_idx = final_scores.index(max(final_scores))

@@ -1,586 +1,393 @@
 #!/usr/bin/env python3
 """
-DCGen End-to-End Pipeline
-=========================
+UIBenchKit local runner (no API server required).
 
-A unified CLI for running image-to-HTML experiments and evaluation.
-
-Usage:
-    python run.py experiment --model gemini --input ./data/demo --output ./data/output
-    python run.py evaluate --reference ./data/demo --dcgen ./data/dcgen_demo --direct ./data/direct_demo
-    python run.py run-all --model gemini --input ./data/demo --name my_experiment
-    python run.py screenshot --dir ./data/dcgen_demo
+This script mirrors API-side execution logic for local development:
+- Same model/env resolution via services.model_factory
+- Same generation methods: direct, dcgen, latcoder, uicopilot, layoutcoder
+- Same persisted run artifacts via run_model.Run
 
 Examples:
-    # Run full experiment with Gemini
-    python run.py run-all --model gemini --input ./data/demo --name test_run
-
-    # Run only DCGen method
-    python run.py experiment --model gpt4 --input ./data/demo --output ./data/gpt4_dcgen --method dcgen
-
-    # Run only evaluation
-    python run.py evaluate --reference ./data/demo --dcgen ./data/dcgen_demo --direct ./data/direct_demo
-
-    # Force regeneration (ignore existing files)
-    python run.py run-all --model gemini --input ./data/demo --name test --force
+  python run.py run --input ./data/demo --method direct --model gpt4
+  python run.py run --input ./data/demo --method uicopilot --model claude --no-eval
+  python run.py quick --image ./data/demo/0.png --method dcgen --model gemini
+  python run.py preflight
 """
 
 import argparse
-import os
-import sys
-import json
 import datetime
+import json
+import os
 import shutil
+import sys
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from utils import (
-    encode_image, get_driver, take_screenshot,
-    ImgSegmentation, DCGenGrid
-)
-from models import GPT4, Gemini, Claude, QwenVL
-from methods.uicopilot import generate_uicopilot
 from dotenv import load_dotenv
-from tqdm import tqdm
-from threading import Thread
-from rapidfuzz import fuzz
-import re
-import time
 
-# ============================================================
-# Prompts
-# ============================================================
-PROMPT_DIRECT = """Here is a prototype image of a webpage. Return a single piece of HTML and tail-wind CSS code to reproduce exactly the website. Use "placeholder.png" to replace the images. Pay attention to things like size, text, position, and color of all the elements, as well as the overall layout. Respond with the content of the HTML+tail-wind CSS code."""
+from config import (
+    OPENAI_BASE_URL,
+    PROMPT_DCGEN,
+    PROMPT_DIRECT,
+    RESULTS_DIR,
+    SEG_PARAMS_DEFAULT,
+    SUPPORTED_METHODS,
+    SUPPORTED_MODELS,
+    get_model_info,
+)
+from run_model import Run
+from services.evaluation_runner import run_evaluation_for_run
+from services.fs_utils import ensure_dir, get_image_files, sanitize_for_filename
+from services.generation import create_dcgen_generator, generate_single, take_screenshots_task
+from services.model_factory import create_bot_factory, get_provider_env_status
 
-PROMPT_DCGEN = {
-    "prompt_leaf": """Here is a prototype image of a container. Please fill a single piece of HTML and tail-wind CSS code to reproduce exactly the given container. Use 'placeholder.png' to replace the images. Pay attention to things like size, text, and color of all the elements, as well as the background color and layout. Here is the code for you to fill in:
-    <div>
-    You code here
-    </div>
-    Respond with only the code inside the <div> tags.""",
-
-    "prompt_root": """Here is a prototype image of a webpage. I have an draft HTML file that contains most of the elements and their correct positions, but it has *inaccurate background*, and some missing or wrong elements. Please compare the draft and the prototype image, then revise the draft implementation. Return a single piece of accurate HTML+tail-wind CSS code to reproduce the website. Use "placeholder.png" to replace the images. Respond with the content of the HTML+tail-wind CSS code. The current implementation I have is: \n\n [CODE]"""
-}
-
-SEG_PARAMS_DEFAULT = {
-    "max_depth": 2,
-    "var_thresh": 50,
-    "diff_thresh": 45,
-    "diff_portion": 0.9,
-    "window_size": 50
-}
+load_dotenv()
 
 
-# ============================================================
-# Model Factory
-# ============================================================
-def get_bot(model_name: str):
-    """Initialize the specified model."""
-    load_dotenv()
-    
-    model_name = model_name.lower()
-    
-    if model_name in ["gemini", "gemini-pro"]:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY not found in environment")
-        return Gemini(api_key)
-    
-    elif model_name in ["gpt4", "gpt-4", "gpt4o", "gpt-4o"]:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment")
-        return GPT4(api_key, model="gpt-4o")
-    
-    elif model_name in ["claude", "claude-sonnet"]:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not found in environment")
-        return Claude(api_key)
-    
-    elif model_name in ["qwen", "qwen-vl"]:
-        api_key = os.getenv("QWEN_API_KEY")
-        if not api_key:
-            raise ValueError("QWEN_API_KEY not found in environment")
-        return QwenVL(api_key)
-    
-    else:
-        raise ValueError(f"Unknown model: {model_name}. Supported: gemini, gpt4, claude, qwen")
+METHOD_IMPORT_ERRORS = {}
+
+try:
+    from methods.latcoder import generate_latcoder
+except Exception as error:
+    METHOD_IMPORT_ERRORS["latcoder"] = error
+
+    def generate_latcoder(*args, **kwargs):
+        raise RuntimeError(f"LatCoder unavailable: {METHOD_IMPORT_ERRORS['latcoder']}")
 
 
-# ============================================================
-# Utility Functions
-# ============================================================
-def get_image_files(directory: str, exclude=["placeholder", "bbox"]):
-    """Get list of PNG files in directory."""
-    files = []
-    for f in os.listdir(directory):
-        if f.endswith(".png"):
-            if not any(ex in f for ex in exclude):
-                files.append(os.path.join(directory, f))
-    return sorted(files)
+try:
+    from methods.uicopilot import generate_uicopilot
+except Exception as error:
+    METHOD_IMPORT_ERRORS["uicopilot"] = error
+
+    def generate_uicopilot(*args, **kwargs):
+        raise RuntimeError(f"UICoPilot unavailable: {METHOD_IMPORT_ERRORS['uicopilot']}")
 
 
-def ensure_dir(path: str):
-    """Create directory if it doesn't exist."""
-    os.makedirs(path, exist_ok=True)
+try:
+    from methods.layoutcoder import generate_layoutcoder
+except Exception as error:
+    METHOD_IMPORT_ERRORS["layoutcoder"] = error
+
+    def generate_layoutcoder(*args, **kwargs):
+        raise RuntimeError(f"LayoutCoder unavailable: {METHOD_IMPORT_ERRORS['layoutcoder']}")
 
 
-# ============================================================
-# Generation Methods
-# ============================================================
-def generate_single(prompt: str, bot, img_path: str, save_path: str = None, max_retries: int = 3):
-    """Generate HTML from a single image using direct prompting."""
-    for i in range(max_retries):
-        try:
-            html = bot.ask(prompt, encode_image(img_path))
-            code = re.findall(r"```html([^`]+)```", html)
-            if code:
-                html = code[0]
-            if len(html) < 10:
-                raise Exception("No HTML code found in response")
-            if save_path:
-                with open(save_path, 'w', encoding="utf-8") as f:
-                    f.write(html)
-            return html
-        except Exception as e:
-            print(f"  Attempt {i+1} failed: {e}")
-            time.sleep(1)
-    raise Exception(f"Failed to generate HTML for {img_path}")
+get_bot = create_bot_factory(
+    get_model_info=get_model_info,
+    supported_models=SUPPORTED_MODELS,
+    default_openai_base_url=OPENAI_BASE_URL,
+)
+generate_dcgen = create_dcgen_generator(
+    prompt_dcgen=PROMPT_DCGEN,
+    seg_params_default=SEG_PARAMS_DEFAULT,
+)
 
 
-def generate_dcgen(bot, img_path: str, save_path: str = None, seg_params: dict = None):
-    """Generate HTML from a single image using DCGen method."""
-    print(f"  DCGen: {os.path.basename(img_path)}")
-    
-    params = seg_params or SEG_PARAMS_DEFAULT
-    img_seg = ImgSegmentation(img_path, **params)
-    
-    dcgen_grid = DCGenGrid(
-        img_seg, 
-        prompt_seg=PROMPT_DCGEN["prompt_leaf"], 
-        prompt_refine=PROMPT_DCGEN["prompt_root"]
-    )
-    dcgen_grid.generate_code(bot, multi_thread=True)
-    
-    if save_path:
-        with open(save_path, 'w', encoding="utf-8", errors="ignore") as f:
-            f.write(dcgen_grid.code)
-    
-    return dcgen_grid.code
+@dataclass
+class LocalRunOptions:
+    input_path: str
+    method: str
+    model: str
+    run_id: str | None
+    output_root: str
+    force: bool
+    no_screenshot: bool
+    no_eval: bool
+    max_instances: int | None
+    user_api_key: str | None
+    user_base_url: str | None
 
 
-def run_experiment(bot, input_dir: str, output_dir: str, method: str = "dcgen", 
-                   force: bool = False, multi_thread: bool = True, seg_params: dict = None):
-    """Run experiment on a directory of images."""
-    ensure_dir(output_dir)
-    filelist = get_image_files(input_dir)
-    
-    print(f"\nRunning {method.upper()} on {len(filelist)} images...")
-    print(f"  Input:  {input_dir}")
-    print(f"  Output: {output_dir}")
-    
-    def process_file(img_path):
-        filename = os.path.basename(img_path).replace('.png', '.html')
-        save_path = os.path.join(output_dir, filename)
-        
-        if os.path.exists(save_path) and not force:
-            print(f"  Skipping {filename} (exists)")
-            return
-        
-        try:
-            if method == "dcgen":
-                generate_dcgen(bot, img_path, save_path, seg_params)
-            elif method == "uicopilot":
-                generate_uicopilot(bot, img_path, save_path)
-            else:  # direct
-                generate_single(PROMPT_DIRECT, bot, img_path, save_path)
-                print(f"  Direct: {filename}")
-        except Exception as e:
-            print(f"  Error processing {filename}: {e}")
-    
-    if multi_thread:
-        threads = []
-        for img_path in tqdm(filelist, desc=method.upper()):
-            t = Thread(target=process_file, args=(img_path,))
-            t.start()
-            threads.append(t)
-            if len(threads) >= 5:
-                for t in threads:
-                    t.join()
-                threads = []
-        for t in threads:
-            t.join()
-    else:
-        for img_path in tqdm(filelist, desc=method.upper()):
-            process_file(img_path)
+def _build_run_id(method: str, model_input: str, explicit_run_id: str | None) -> str:
+    if explicit_run_id:
+        return explicit_run_id
+    _, model_version = get_model_info(model_input)
+    version_for_name = sanitize_for_filename(model_version if model_version else model_input)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{method}_{version_for_name}_{timestamp}"
 
 
-# ============================================================
-# Screenshot Generation
-# ============================================================
-def take_screenshots(directory: str, replace: bool = False):
-    """Generate screenshots for all HTML files in directory."""
-    html_files = [f for f in os.listdir(directory) if f.endswith('.html')]
-    
-    if not html_files:
-        print(f"No HTML files found in {directory}")
-        return
-    
-    print(f"\nGenerating screenshots for {len(html_files)} files in {directory}...")
-    
-    driver = get_driver(string="<html></html>")
-    
-    for filename in tqdm(html_files, desc="Screenshots"):
-        html_path = os.path.join(directory, filename)
-        png_path = html_path.replace('.html', '.png')
-        
-        if os.path.exists(png_path) and not replace:
-            continue
-        
-        try:
-            driver.get("file://" + os.path.abspath(html_path))
-            take_screenshot(driver, png_path)
-        except Exception as e:
-            print(f"  Error: {filename}: {e}")
-    
-    driver.quit()
+def _prepare_input_dir(input_path: str) -> tuple[str, str | None]:
+    """
+    Return (input_dir, temp_dir_to_cleanup).
+    If input_path is a file, create a temp dir with input.png and optional placeholder.png.
+    """
+    abs_path = os.path.abspath(input_path)
+    if not os.path.exists(abs_path):
+        raise FileNotFoundError(f"Input path not found: {abs_path}")
+
+    if os.path.isdir(abs_path):
+        return abs_path, None
+
+    ext = Path(abs_path).suffix.lower()
+    if ext not in [".png", ".jpg", ".jpeg", ".webp", ".bmp"]:
+        raise ValueError(f"Unsupported input image extension: {ext}")
+
+    temp_dir = tempfile.mkdtemp(prefix="uibenchkit-local-")
+    target_img = os.path.join(temp_dir, "input.png")
+    shutil.copy(abs_path, target_img)
+
+    input_placeholder = os.path.join(os.path.dirname(abs_path), "placeholder.png")
+    project_placeholder = os.path.join(os.path.dirname(__file__), "placeholder.png")
+    if os.path.exists(input_placeholder):
+        shutil.copy(input_placeholder, os.path.join(temp_dir, "placeholder.png"))
+    elif os.path.exists(project_placeholder):
+        shutil.copy(project_placeholder, os.path.join(temp_dir, "placeholder.png"))
+
+    return temp_dir, temp_dir
 
 
-def copy_placeholder(src_dir: str, dst_dir: str):
-    """Copy placeholder.png to destination directory."""
-    src = os.path.join(src_dir, "placeholder.png")
+def _method_generate(method: str, bot, img_path: str, save_path: str):
+    if method == "dcgen":
+        return generate_dcgen(bot, img_path, save_path, SEG_PARAMS_DEFAULT)
+    if method == "latcoder":
+        return generate_latcoder(bot, img_path, save_path)
+    if method == "uicopilot":
+        return generate_uicopilot(bot, img_path, save_path)
+    if method == "layoutcoder":
+        return generate_layoutcoder(bot, img_path, save_path)
+    return generate_single(PROMPT_DIRECT, bot, img_path, save_path)
+
+
+def _copy_placeholder(input_dir: str, output_dir: str):
+    src = os.path.join(input_dir, "placeholder.png")
     if os.path.exists(src):
-        shutil.copy(src, os.path.join(dst_dir, "placeholder.png"))
+        shutil.copy(src, os.path.join(output_dir, "placeholder.png"))
 
 
-# ============================================================
-# Evaluation
-# ============================================================
-def compute_code_similarity(file1: str, file2: str) -> float:
-    """Compute fuzzy string similarity between two HTML files."""
-    with open(file1, 'r', encoding='utf-8', errors='ignore') as f:
-        html1 = f.read()
-    with open(file2, 'r', encoding='utf-8', errors='ignore') as f:
-        html2 = f.read()
-    return fuzz.ratio(html1, html2)
+def execute_local_run(options: LocalRunOptions) -> int:
+    method = options.method.lower()
+    if method not in SUPPORTED_METHODS:
+        print(f"Unsupported method: {method}. Supported: {', '.join(SUPPORTED_METHODS)}")
+        return 2
 
+    if method in METHOD_IMPORT_ERRORS:
+        print(f"Method '{method}' is unavailable in this environment: {METHOD_IMPORT_ERRORS[method]}")
+        return 2
 
-def compute_clip_score(img1_path: str, img2_path: str, scorer) -> float:
-    """Compute CLIP similarity score between two images."""
-    from PIL import Image
-    img1 = Image.open(img1_path)
-    img2 = Image.open(img2_path)
-    return scorer.score(img1, img2)
+    model_family, model_version = get_model_info(options.model)
+    if not model_family:
+        print(f"Unsupported model: {options.model}. Supported families: {', '.join(SUPPORTED_MODELS)}")
+        return 2
 
-
-def evaluate_directory(ref_dir: str, test_dir: str, metric: str = "clip", scorer=None) -> dict:
-    """Evaluate a test directory against reference."""
-    results = {}
-    test_files = os.listdir(test_dir)
-    
-    for filename in tqdm(test_files, desc=f"Eval {os.path.basename(test_dir)}"):
-        if metric == "clip":
-            if not filename.endswith('.png') or 'placeholder' in filename:
-                continue
-            ref_file = os.path.join(ref_dir, filename)
-            test_file = os.path.join(test_dir, filename)
-            if os.path.exists(ref_file):
-                try:
-                    results[filename] = compute_clip_score(ref_file, test_file, scorer)
-                except Exception as e:
-                    print(f"  Error: {filename}: {e}")
-        else:  # code similarity
-            if not filename.endswith('.html'):
-                continue
-            ref_file = os.path.join(ref_dir, filename)
-            test_file = os.path.join(test_dir, filename)
-            if os.path.exists(ref_file):
-                try:
-                    results[filename] = compute_code_similarity(ref_file, test_file)
-                except Exception as e:
-                    print(f"  Error: {filename}: {e}")
-    
-    return results
-
-
-def run_evaluation(ref_dir: str, test_dirs: dict, output_name: str = "evaluation"):
-    """Run full evaluation suite."""
-    print(f"\n{'='*60}")
-    print("EVALUATION")
-    print(f"{'='*60}")
-    print(f"Reference: {ref_dir}")
-    for name, path in test_dirs.items():
-        print(f"  {name}: {path}")
-    
-    results = {"timestamp": datetime.datetime.now().isoformat()}
-    
-    # CLIP evaluation
-    print("\n--- CLIP Score (Visual Similarity) ---")
+    input_dir, temp_dir = None, None
     try:
-        import open_clip
-        import torch
-        from PIL import Image
-        
-        class CLIPScorer:
-            def __init__(self):
-                self.device = "cuda" if torch.cuda.is_available() else "cpu"
-                self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-                    'ViT-B-32-quickgelu', pretrained='openai'
-                )
-                self.model.to(self.device)
-            
-            def score(self, img1, img2):
-                image1 = self.preprocess(img1).unsqueeze(0).to(self.device)
-                image2 = self.preprocess(img2).unsqueeze(0).to(self.device)
-                with torch.no_grad():
-                    feat1 = self.model.encode_image(image1)
-                    feat2 = self.model.encode_image(image2)
-                feat1 /= feat1.norm(dim=-1, keepdim=True)
-                feat2 /= feat2.norm(dim=-1, keepdim=True)
-                return torch.nn.functional.cosine_similarity(feat1, feat2).item()
-        
-        scorer = CLIPScorer()
-        results["clip"] = {}
-        
-        for name, test_dir in test_dirs.items():
-            scores = evaluate_directory(ref_dir, test_dir, metric="clip", scorer=scorer)
-            if scores:
-                avg = sum(scores.values()) / len(scores)
-                results["clip"][name] = {"scores": scores, "average": avg}
-                print(f"  {name}: {avg:.4f}")
-    except ImportError:
-        print("  Skipped (open_clip not installed)")
-    
-    # Code similarity evaluation
-    print("\n--- Code Similarity ---")
-    results["code_sim"] = {}
-    
-    for name, test_dir in test_dirs.items():
-        scores = evaluate_directory(ref_dir, test_dir, metric="code")
-        if scores:
-            avg = sum(scores.values()) / len(scores)
-            results["code_sim"][name] = {"scores": scores, "average": avg}
-            print(f"  {name}: {avg:.2f}%")
-    
-    # Save results
-    output_file = f"{output_name}_results.json"
-    with open(output_file, 'w') as f:
-        json.dump(results, f, indent=2)
-    print(f"\nResults saved to: {output_file}")
-    
-    # Print summary
-    print(f"\n{'='*60}")
-    print("SUMMARY")
-    print(f"{'='*60}")
-    print(f"{'Method':<15} {'CLIP Score':>15} {'Code Sim':>15}")
-    print("-" * 45)
-    
-    for name in test_dirs.keys():
-        clip_avg = results.get("clip", {}).get(name, {}).get("average", 0)
-        code_avg = results.get("code_sim", {}).get(name, {}).get("average", 0)
-        print(f"{name:<15} {clip_avg:>15.4f} {code_avg:>14.2f}%")
-    
-    return results
+        input_dir, temp_dir = _prepare_input_dir(options.input_path)
+        run_id = _build_run_id(method, options.model, options.run_id)
+        run = Run(
+            run_id=run_id,
+            model=model_version,
+            method=method,
+            input_dir=input_dir,
+            api_key="local-cli",
+            user_api_key=options.user_api_key,
+            user_base_url=options.user_base_url,
+        )
+
+        output_root = os.path.abspath(options.output_root)
+        ensure_dir(output_root)
+        run.output_dir = os.path.join(output_root, run_id)
+        ensure_dir(run.output_dir)
+
+        files = get_image_files(run.input_dir)
+        if options.max_instances is not None:
+            files = files[: options.max_instances]
+
+        if not files:
+            run.status = "failed"
+            run.error = "No valid input PNG files found"
+            run.completed_at = datetime.datetime.now().isoformat()
+            run.save_to_disk()
+            print("No valid input images found.")
+            return 1
+
+        for img_path in files:
+            instance_id = os.path.basename(img_path).replace(".png", "")
+            run.instances[instance_id] = {"status": "pending", "result": None}
+
+        run.status = "running"
+        run.total_instances = len(files)
+        run.save_to_disk()
+
+        print(f"\n{'=' * 60}")
+        print("UIBENCHKIT LOCAL RUN")
+        print(f"{'=' * 60}")
+        print(f"Run ID:    {run_id}")
+        print(f"Method:    {method}")
+        print(f"Model:     {model_version} ({model_family})")
+        print(f"Input:     {run.input_dir}")
+        print(f"Output:    {run.output_dir}")
+        print(f"Instances: {len(files)}")
+        print(f"{'=' * 60}")
+
+        bot = get_bot(
+            run.model,
+            user_api_key=run.user_api_key,
+            user_base_url=run.user_base_url,
+        )
+        if hasattr(bot, "reset_token_usage"):
+            bot.reset_token_usage()
+
+        for index, img_path in enumerate(files, 1):
+            instance_id = os.path.basename(img_path).replace(".png", "")
+            save_path = os.path.join(run.output_dir, f"{instance_id}.html")
+            run.instances[instance_id]["status"] = "running"
+
+            if os.path.exists(save_path) and not options.force:
+                run.instances[instance_id]["status"] = "completed"
+                run.instances[instance_id]["result"] = save_path
+                print(f"[{index}/{len(files)}] skip {instance_id} (exists)")
+                continue
+
+            try:
+                _method_generate(method, bot, img_path, save_path)
+                run.instances[instance_id]["status"] = "completed"
+                run.instances[instance_id]["result"] = save_path
+                print(f"[{index}/{len(files)}] done {instance_id}")
+            except Exception as error:
+                run.instances[instance_id]["status"] = "failed"
+                run.instances[instance_id]["error"] = str(error)
+                print(f"[{index}/{len(files)}] fail {instance_id}: {error}")
+
+            if hasattr(bot, "print_token_usage"):
+                run.token_usage = bot.print_token_usage(method)
+            run.save_to_disk()
+
+        _copy_placeholder(run.input_dir, run.output_dir)
+
+        if not options.no_screenshot:
+            try:
+                take_screenshots_task(run.output_dir, replace=options.force)
+            except Exception as error:
+                print(f"Screenshot generation warning: {error}")
+
+        if hasattr(bot, "print_token_usage"):
+            run.token_usage = bot.print_token_usage(method)
+
+        if not options.no_eval:
+            try:
+                run.evaluation = run_evaluation_for_run(run)
+            except Exception as error:
+                run.error = f"Evaluation warning: {error}"
+
+        run.status = "completed"
+        run.completed_at = datetime.datetime.now().isoformat()
+        run.save_to_disk()
+
+        completed = len([x for x in run.instances.values() if x.get("status") == "completed"])
+        failed = len([x for x in run.instances.values() if x.get("status") == "failed"])
+        print(f"\nCompleted: {completed}/{len(files)} | Failed: {failed}/{len(files)}")
+        print(f"Artifacts: {run.output_dir}")
+        return 0 if completed > 0 else 1
+
+    except Exception as error:
+        print(f"Fatal error: {error}")
+        return 1
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-# ============================================================
-# CLI Commands
-# ============================================================
-def cmd_experiment(args):
-    """Run generation experiment."""
-    bot = get_bot(args.model)
-    
-    if hasattr(bot, 'reset_token_usage'):
-        bot.reset_token_usage()
-    
-    run_experiment(
-        bot, 
-        args.input, 
-        args.output, 
+def cmd_preflight(_args) -> int:
+    status = get_provider_env_status(OPENAI_BASE_URL)
+    print("UIBenchKit local preflight")
+    print(f"Python: {sys.executable}")
+    print(f"OpenAI base URL: {OPENAI_BASE_URL}")
+    print("Provider env status:")
+    print(json.dumps(status, indent=2))
+    print("Method import status:")
+    for method in SUPPORTED_METHODS:
+        if method in METHOD_IMPORT_ERRORS:
+            print(f"  - {method}: unavailable ({METHOD_IMPORT_ERRORS[method]})")
+        else:
+            print(f"  - {method}: available")
+    return 0
+
+
+def cmd_run(args) -> int:
+    options = LocalRunOptions(
+        input_path=args.input,
         method=args.method,
+        model=args.model,
+        run_id=args.run_id,
+        output_root=args.output_root,
         force=args.force,
-        multi_thread=not args.no_parallel,
-        seg_params=SEG_PARAMS_DEFAULT
+        no_screenshot=args.no_screenshot,
+        no_eval=args.no_eval,
+        max_instances=args.max_instances,
+        user_api_key=args.user_api_key,
+        user_base_url=args.user_base_url,
     )
-    
-    # Copy placeholder and take screenshots
-    copy_placeholder(args.input, args.output)
-    take_screenshots(args.output, replace=True)
-    
-    if hasattr(bot, 'print_token_usage'):
-        bot.print_token_usage(f"{args.method.upper()} Experiment")
+    return execute_local_run(options)
 
 
-def cmd_evaluate(args):
-    """Run evaluation."""
-    test_dirs = {}
-    if args.dcgen:
-        test_dirs["dcgen"] = args.dcgen
-    if args.direct:
-        test_dirs["direct"] = args.direct
-    
-    if not test_dirs:
-        print("Error: At least one of --dcgen or --direct must be specified")
-        sys.exit(1)
-    
-    run_evaluation(args.reference, test_dirs, args.output)
+def cmd_quick(args) -> int:
+    options = LocalRunOptions(
+        input_path=args.image,
+        method=args.method,
+        model=args.model,
+        run_id=args.run_id,
+        output_root=args.output_root,
+        force=args.force,
+        no_screenshot=not args.with_screenshot,
+        no_eval=not args.with_eval,
+        max_instances=1,
+        user_api_key=args.user_api_key,
+        user_base_url=args.user_base_url,
+    )
+    return execute_local_run(options)
 
 
-def cmd_screenshot(args):
-    """Generate screenshots for HTML files."""
-    take_screenshots(args.dir, replace=args.force)
-
-
-def cmd_run_all(args):
-    """Run full end-to-end pipeline."""
-    print(f"\n{'='*60}")
-    print(f"DCGen End-to-End Pipeline")
-    print(f"{'='*60}")
-    print(f"Model:  {args.model}")
-    print(f"Input:  {args.input}")
-    print(f"Name:   {args.name}")
-    print(f"{'='*60}")
-    
-    # Setup directories
-    base_dir = os.path.dirname(args.input.rstrip('/'))
-    dcgen_dir = os.path.join(base_dir, f"{args.name}_dcgen")
-    direct_dir = os.path.join(base_dir, f"{args.name}_direct")
-    
-    bot = get_bot(args.model)
-    
-    # Run DCGen
-    print(f"\n{'='*60}")
-    print("STEP 1: DCGen Generation")
-    print(f"{'='*60}")
-    if hasattr(bot, 'reset_token_usage'):
-        bot.reset_token_usage()
-    
-    run_experiment(bot, args.input, dcgen_dir, method="dcgen", 
-                   force=args.force, seg_params=SEG_PARAMS_DEFAULT)
-    copy_placeholder(args.input, dcgen_dir)
-    take_screenshots(dcgen_dir, replace=True)
-    
-    dcgen_tokens = None
-    if hasattr(bot, 'print_token_usage'):
-        dcgen_tokens = bot.print_token_usage("DCGen")
-    
-    # Run Direct
-    print(f"\n{'='*60}")
-    print("STEP 2: Direct Prompting Generation")
-    print(f"{'='*60}")
-    if hasattr(bot, 'reset_token_usage'):
-        bot.reset_token_usage()
-    
-    run_experiment(bot, args.input, direct_dir, method="direct", 
-                   force=args.force)
-    copy_placeholder(args.input, direct_dir)
-    take_screenshots(direct_dir, replace=True)
-    
-    direct_tokens = None
-    if hasattr(bot, 'print_token_usage'):
-        direct_tokens = bot.print_token_usage("Direct")
-    
-    # Evaluate
-    print(f"\n{'='*60}")
-    print("STEP 3: Evaluation")
-    print(f"{'='*60}")
-    test_dirs = {"dcgen": dcgen_dir, "direct": direct_dir}
-    results = run_evaluation(args.input, test_dirs, args.name)
-    
-    # Token comparison
-    if dcgen_tokens and direct_tokens:
-        print(f"\n{'='*60}")
-        print("TOKEN USAGE COMPARISON")
-        print(f"{'='*60}")
-        print(f"{'Metric':<20} {'DCGen':>12} {'Direct':>12}")
-        print("-" * 45)
-        print(f"{'API Calls':<20} {dcgen_tokens.get('call_count', 0):>12,} {direct_tokens.get('call_count', 0):>12,}")
-        print(f"{'Total Tokens':<20} {dcgen_tokens.get('total_tokens', 0):>12,} {direct_tokens.get('total_tokens', 0):>12,}")
-        
-        # Save token comparison
-        token_comparison = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "dcgen": dcgen_tokens,
-            "direct": direct_tokens
-        }
-        with open(f"{args.name}_tokens.json", 'w') as f:
-            json.dump(token_comparison, f, indent=2)
-    
-    print(f"\n{'='*60}")
-    print("✓ Pipeline Complete!")
-    print(f"{'='*60}")
-    print(f"  DCGen output:  {dcgen_dir}")
-    print(f"  Direct output: {direct_dir}")
-    print(f"  Results:       {args.name}_results.json")
-
-
-# ============================================================
-# Main Entry Point
-# ============================================================
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="DCGen End-to-End Pipeline",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        description="UIBenchKit local runner (no API server required)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-    
-    # experiment command
-    exp_parser = subparsers.add_parser("experiment", help="Run generation experiment")
-    exp_parser.add_argument("--model", "-m", required=True, 
-                           choices=["gemini", "gpt4", "claude", "qwen"],
-                           help="Model to use")
-    exp_parser.add_argument("--input", "-i", required=True, help="Input directory with PNG images")
-    exp_parser.add_argument("--output", "-o", required=True, help="Output directory for HTML files")
-    exp_parser.add_argument("--method", choices=["dcgen", "direct", "uicopilot"], default="dcgen",
-                           help="Generation method (default: dcgen)")
-    exp_parser.add_argument("--force", "-f", action="store_true", 
-                           help="Force regeneration of existing files")
-    exp_parser.add_argument("--no-parallel", action="store_true",
-                           help="Disable parallel processing")
-    exp_parser.set_defaults(func=cmd_experiment)
-    
-    # evaluate command
-    eval_parser = subparsers.add_parser("evaluate", help="Run evaluation")
-    eval_parser.add_argument("--reference", "-r", required=True, 
-                            help="Reference directory with original HTML/PNG")
-    eval_parser.add_argument("--dcgen", help="DCGen output directory")
-    eval_parser.add_argument("--direct", help="Direct prompting output directory")
-    eval_parser.add_argument("--output", "-o", default="evaluation",
-                            help="Output name prefix for results")
-    eval_parser.set_defaults(func=cmd_evaluate)
-    
-    # screenshot command
-    ss_parser = subparsers.add_parser("screenshot", help="Generate screenshots for HTML files")
-    ss_parser.add_argument("--dir", "-d", required=True, help="Directory with HTML files")
-    ss_parser.add_argument("--force", "-f", action="store_true", 
-                          help="Replace existing screenshots")
-    ss_parser.set_defaults(func=cmd_screenshot)
-    
-    # run-all command
-    all_parser = subparsers.add_parser("run-all", help="Run full end-to-end pipeline")
-    all_parser.add_argument("--model", "-m", required=True,
-                           choices=["gemini", "gpt4", "claude", "qwen"],
-                           help="Model to use")
-    all_parser.add_argument("--input", "-i", required=True, 
-                           help="Input directory with PNG images")
-    all_parser.add_argument("--name", "-n", required=True,
-                           help="Experiment name (used for output directories)")
-    all_parser.add_argument("--force", "-f", action="store_true",
-                           help="Force regeneration of existing files")
-    all_parser.set_defaults(func=cmd_run_all)
-    
+    subparsers = parser.add_subparsers(dest="command")
+
+    run_parser = subparsers.add_parser("run", help="Run local benchmark/inference")
+    run_parser.add_argument("--input", "-i", required=True, help="Input image or directory")
+    run_parser.add_argument("--method", choices=SUPPORTED_METHODS, default="direct", help="Generation method")
+    run_parser.add_argument("--model", "-m", default="gpt4", help="Model family or version")
+    run_parser.add_argument("--run-id", help="Explicit run ID")
+    run_parser.add_argument("--output-root", default=RESULTS_DIR, help="Root directory for run artifacts")
+    run_parser.add_argument("--max-instances", type=int, help="Limit number of input images")
+    run_parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
+    run_parser.add_argument("--no-screenshot", action="store_true", help="Skip screenshot generation")
+    run_parser.add_argument("--no-eval", action="store_true", help="Skip evaluation stage")
+    run_parser.add_argument("--user-api-key", help="Override provider API key for this run")
+    run_parser.add_argument("--user-base-url", help="Override OpenAI-compatible base URL for this run")
+    run_parser.set_defaults(func=cmd_run)
+
+    quick_parser = subparsers.add_parser("quick", help="Quick single-image local run")
+    quick_parser.add_argument("--image", "-i", required=True, help="Input image path")
+    quick_parser.add_argument("--method", choices=SUPPORTED_METHODS, default="direct", help="Generation method")
+    quick_parser.add_argument("--model", "-m", default="gpt4", help="Model family or version")
+    quick_parser.add_argument("--run-id", help="Explicit run ID")
+    quick_parser.add_argument("--output-root", default=RESULTS_DIR, help="Root directory for run artifacts")
+    quick_parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
+    quick_parser.add_argument("--with-screenshot", action="store_true", help="Enable screenshot generation")
+    quick_parser.add_argument("--with-eval", action="store_true", help="Enable evaluation")
+    quick_parser.add_argument("--user-api-key", help="Override provider API key for this run")
+    quick_parser.add_argument("--user-base-url", help="Override OpenAI-compatible base URL for this run")
+    quick_parser.set_defaults(func=cmd_quick)
+
+    preflight_parser = subparsers.add_parser("preflight", help="Check env + method readiness")
+    preflight_parser.set_defaults(func=cmd_preflight)
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
-    
     if not args.command:
         parser.print_help()
-        sys.exit(1)
-    
-    args.func(args)
+        return 1
+    return args.func(args)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

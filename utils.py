@@ -108,11 +108,7 @@ def get_driver_pw(file=None, headless=True, string=None, window_size=(1920, 1080
 PLACEHOLDER_URL = None
 placeholder_paths = [
     './placeholder.png',
-    './scripts/placeholder.png',
-    './Tool/static/placeholder.png',
     os.path.join(os.path.dirname(__file__), 'placeholder.png'),
-    os.path.join(os.path.dirname(__file__), 'scripts', 'placeholder.png'),
-    os.path.join(os.path.dirname(__file__), 'Tool', 'static', 'placeholder.png')
 ]
 
 for placeholder_path in placeholder_paths:

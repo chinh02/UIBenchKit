@@ -347,7 +347,7 @@ def pipeline(bot, image_path: str, output_root: str,
 
 
 # ============================================================
-# DCGen API Integration
+# UIBenchKit API Integration
 # ============================================================
 
 def generate_layoutcoder(bot, img_path: str, save_path: str = None,
@@ -356,7 +356,7 @@ def generate_layoutcoder(bot, img_path: str, save_path: str = None,
     Generate HTML from image using the LayoutCoder method.
 
     This function matches the signature of generate_dcgen(), generate_latcoder(), etc.
-    for easy integration with the DCGen API.
+    for easy integration with the UIBenchKit API.
 
     Args:
         bot: DCGen bot instance (any model: GPT4, Claude, Gemini, etc.)
@@ -407,3 +407,4 @@ def generate_layoutcoder(bot, img_path: str, save_path: str = None,
             pass  # Screenshot is optional; pipeline handles it separately
 
     return html_code
+

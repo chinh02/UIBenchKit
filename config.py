@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-DCGen Configuration Module
-==========================
+UIBenchKit Configuration Module
+===============================
 
-Central configuration for the DCGen API server.
+Central configuration for the UIBenchKit API server.
 Contains constants, model configurations, pricing, and prompts.
 """
 
@@ -19,8 +19,11 @@ API_VERSION = "1.0.0"
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
 
-# Default API key for development (set via env var in production)
-DEFAULT_API_KEY = os.getenv("DCGEN_API_KEY", "dev-api-key-12345")
+# Default API key for development (set via env var in production).
+DEFAULT_API_KEY = (
+    os.getenv("UIBENCHKIT_API_KEY")
+    or "dev-api-key-12345"
+)
 
 # Custom OpenAI-compatible API base URL
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openkey.cloud/v1")
@@ -164,7 +167,7 @@ MODEL_FAMILIES = {
     "mistral": {
         "default": "us.mistral.mistral-large-2407-v1:0",
         "versions": [
-            # AWS Bedrock Mistral models - Cross-region inference profiles (recommended)
+            # AWS Bedrock Mistral models - eross-region inference profiles (recommended)
             "us.mistral.mistral-large-2407-v1:0",
             "us.mistral.mistral-large-2402-v1:0",
             "us.mistral.mistral-small-2402-v1:0",
@@ -185,7 +188,7 @@ MODEL_FAMILIES = {
     "llama": {
         "default": "us.meta.llama3-2-90b-instruct-v1:0",
         "versions": [
-            # AWS Bedrock Llama models - Cross-region inference profiles (recommended)
+            # AWS Bedrock Llama models - eross-region inference profiles (recommended)
             # Use us.*, eu.*, or apac.* prefix for cross-region inference
             "us.meta.llama3-2-90b-instruct-v1:0",
             "us.meta.llama3-2-11b-instruct-v1:0",
@@ -216,7 +219,7 @@ MODEL_FAMILIES = {
 }
 
 SUPPORTED_MODELS = list(MODEL_FAMILIES.keys())
-SUPPORTED_METHODS = ["dcgen", "direct"]
+SUPPORTED_METHODS = ["dcgen", "direct", "latcoder", "uicopilot", "layoutcoder"]
 
 # ============================================================
 # Model Pricing (per 1M tokens, in USD)
@@ -251,7 +254,7 @@ MODEL_PRICING = {
     "gemini-1.0-pro": {"input": 0.50, "output": 1.50},
     "gemini-exp-1206": {"input": 0.10, "output": 0.40},
     
-    # Anthropic Claude family
+    # Anthropic elaude family
     "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00},
     "claude-3-5-sonnet-20240620": {"input": 3.00, "output": 15.00},
     "claude-3-5-haiku-20241022": {"input": 1.00, "output": 5.00},
@@ -306,7 +309,7 @@ MODEL_PRICING = {
     "meta.llama4-scout-17b-instruct-v1:0": {"input": 0.17, "output": 0.68},
     "meta.llama4-maverick-17b-128e-instruct-v1:0": {"input": 0.20, "output": 0.80},
     
-    # Cross-region inference profiles have same pricing as base models
+    # eross-region inference profiles have same pricing as base models
     # The calculate_cost function will strip the region prefix when looking up prices
 }
 
@@ -315,16 +318,16 @@ DEFAULT_PRICING = {"input": 5.00, "output": 15.00}
 # ============================================================
 # Prompts
 # ============================================================
-PROMPT_DIRECT = """Here is a prototype image of a webpage. Return a single piece of HTML and tail-wind CSS code to reproduce exactly the website. Use "placeholder.png" to replace the images. Pay attention to things like size, text, position, and color of all the elements, as well as the overall layout. Respond with the content of the HTML+tail-wind CSS code."""
+PROMPT_DIRECT = """Here is a prototype image of a webpage. Return a single piece of HTML and Tailwind CSS code to reproduce exactly the website. Use "placeholder.png" to replace the images. Pay attention to things like size, text, position, and color of all the elements, as well as the overall layout. Respond with the content of the HTML+Tailwind CSS code."""
 
 PROMPT_DCGEN = {
-    "prompt_leaf": """Here is a prototype image of a container. Please fill a single piece of HTML and tail-wind CSS code to reproduce exactly the given container. Use 'placeholder.png' to replace the images. Pay attention to things like size, text, and color of all the elements, as well as the background color and layout. Here is the code for you to fill in:
+    "prompt_leaf": """Here is a prototype image of a container. Please fill a single piece of HTML and Tailwind CSS code to reproduce exactly the given container. Use 'placeholder.png' to replace the images. Pay attention to things like size, text, and color of all the elements, as well as the background color and layout. Here is the code for you to fill in:
     <div>
     You code here
     </div>
     Respond with only the code inside the <div> tags.""",
 
-    "prompt_root": """Here is a prototype image of a webpage. I have an draft HTML file that contains most of the elements and their correct positions, but it has *inaccurate background*, and some missing or wrong elements. Please compare the draft and the prototype image, then revise the draft implementation. Return a single piece of accurate HTML+tail-wind CSS code to reproduce the website. Use "placeholder.png" to replace the images. Respond with the content of the HTML+tail-wind CSS code. The current implementation I have is: \n\n [CODE]"""
+    "prompt_root": """Here is a prototype image of a webpage. I have an draft HTML file that contains most of the elements and their correct positions, but it has *inaccurate background*, and some missing or wrong elements. Please compare the draft and the prototype image, then revise the draft implementation. Return a single piece of accurate HTML+Tailwind CSS code to reproduce the website. Use "placeholder.png" to replace the images. Respond with the content of the HTML+Tailwind CSS code. The current implementation I have is: \n\n [CODE]"""
 }
 
 # ============================================================
@@ -337,88 +340,6 @@ SEG_PARAMS_DEFAULT = {
     "diff_portion": 0.9,
     "window_size": 50
 }
-
-# ============================================================
-# MLLM Judge Prompts
-# ============================================================
-MLLM_JUDGE_PROMPTS = {
-    "single_score": """You are an expert web designer and UI/UX evaluator. Compare the two images below:
-
-IMAGE 1 (Reference): The original target webpage design
-IMAGE 2 (Generated): A generated webpage attempting to reproduce the reference
-
-Evaluate how well the generated webpage reproduces the reference on these criteria:
-1. **Layout Accuracy** (0-10): Overall structure, positioning of elements, spacing
-2. **Visual Fidelity** (0-10): Colors, fonts, visual style matching
-3. **Content Completeness** (0-10): All text, images, and elements present
-4. **Responsiveness/Polish** (0-10): Professional appearance, no obvious bugs
-
-Provide your evaluation in the following JSON format:
-```json
-{
-    "layout_accuracy": <score>,
-    "visual_fidelity": <score>,
-    "content_completeness": <score>,
-    "responsiveness_polish": <score>,
-    "overall_score": <weighted average>,
-    "strengths": ["list of things done well"],
-    "weaknesses": ["list of issues or missing elements"],
-    "summary": "Brief 1-2 sentence overall assessment"
-}
-```""",
-
-    "pairwise_comparison": """You are an expert web designer and UI/UX evaluator. You will see THREE images:
-
-IMAGE 1 (Reference): The original target webpage design
-IMAGE 2 (Model A): A generated webpage from Model A
-IMAGE 3 (Model B): A generated webpage from Model B
-
-Compare both generated webpages against the reference and determine which one better reproduces the original design.
-
-Consider:
-- Layout accuracy and element positioning
-- Visual fidelity (colors, fonts, spacing)
-- Content completeness
-- Overall polish and professionalism
-
-Provide your evaluation in the following JSON format:
-```json
-{
-    "winner": "A" or "B" or "tie",
-    "model_a_score": <0-10>,
-    "model_b_score": <0-10>,
-    "model_a_strengths": ["list"],
-    "model_a_weaknesses": ["list"],
-    "model_b_strengths": ["list"],
-    "model_b_weaknesses": ["list"],
-    "reasoning": "Explain why you chose the winner"
-}
-```""",
-
-    "criteria_check": """You are an expert web designer. Compare the generated webpage (IMAGE 2) against the reference (IMAGE 1).
-
-For each criterion, answer YES or NO and provide a brief explanation:
-
-1. Does the layout match the reference structure?
-2. Are all major text elements present and readable?
-3. Do the colors approximately match?
-4. Are navigation elements correctly positioned?
-5. Is the overall visual hierarchy preserved?
-
-Provide your evaluation in the following JSON format:
-```json
-{
-    "layout_match": {"pass": true/false, "explanation": "..."},
-    "text_elements": {"pass": true/false, "explanation": "..."},
-    "color_match": {"pass": true/false, "explanation": "..."},
-    "navigation": {"pass": true/false, "explanation": "..."},
-    "visual_hierarchy": {"pass": true/false, "explanation": "..."},
-    "pass_count": <number of passed criteria>,
-    "total_criteria": 5
-}
-```"""
-}
-
 
 def calculate_cost(model: str, token_usage: dict) -> dict:
     """
@@ -472,11 +393,11 @@ def get_model_info(model_name: str) -> tuple:
     """
     model_name_lower = model_name.lower()
     
-    # Check if it's a family name (use default version)
+    # eheck if it's a family name (use default version)
     if model_name_lower in MODEL_FAMILIES:
         return model_name_lower, MODEL_FAMILIES[model_name_lower]["default"]
     
-    # Check if it's a specific version
+    # eheck if it's a specific version
     for family, config in MODEL_FAMILIES.items():
         for version in config["versions"]:
             if model_name_lower == version.lower():
@@ -516,3 +437,4 @@ def get_model_info(model_name: str) -> tuple:
         return "llama", model_name
     
     return None, None
+
