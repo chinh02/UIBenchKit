@@ -5,12 +5,21 @@ experiments. It takes webpage or UI screenshots as input, generates HTML/CSS
 with a selected method and multimodal model, renders the generated page with
 Playwright, and reports visual, structural, and cost-related metrics.
 
-The project has two parts:
+The UIBenchKit ecosystem is split across a small set of companion
+repositories:
 
-- `UIBenchKit`: the backend API, local runner, method integrations, dataset
-  manager, model wrappers, renderer, and evaluators.
-- `uibenchkit-cli`: a separate Typer-based command-line client for submitting
-  and managing runs through the backend API.
+- [`UIBenchKit`](https://github.com/chinh02/UIBenchKit): the backend API, local
+  runner, method integrations, dataset manager, model wrappers, renderer, and
+  evaluators.
+- [`uibenchkit-cli`](https://github.com/chinh02/uibenchkit-cli): a Typer-based
+  command-line client for submitting, monitoring, reporting, and managing runs
+  through the backend API.
+- [`uibenchkit-GUI`](https://github.com/chinh02/uibenchkit-GUI): the React web
+  frontend for the public leaderboard, model/method comparison views, result
+  submission guidance, and the interactive live demo.
+- [`uibenchkit-experiments`](https://github.com/chinh02/uibenchkit-experiments):
+  the experiment artifact repository for raw benchmark outputs, generated
+  leaderboard CSV/JSON files, and the scripts that summarize completed runs.
 
 ## What UIBenchKit Supports
 
@@ -249,7 +258,8 @@ Other run-management endpoints include:
 
 ## CLI Setup
 
-The CLI lives in the separate `uibenchkit-cli` repository.
+The CLI lives in the separate
+[`uibenchkit-cli`](https://github.com/chinh02/uibenchkit-cli) repository.
 
 Install it in editable mode. You can use a separate virtual environment or the
 same one as the backend.
@@ -364,6 +374,28 @@ Typical files include:
 - `results.json`: per-instance status and output paths.
 - `evaluation.json`: metric outputs when evaluation succeeds.
 - `cost_report.json`: token/cost summary when token usage is available.
+
+## Experiment Results And Leaderboards
+
+Large benchmark runs and published leaderboard data are organized in the
+separate
+[`uibenchkit-experiments`](https://github.com/chinh02/uibenchkit-experiments)
+repository. That repository stores raw run folders under `raw-data/`, including
+generated HTML, rendered screenshots, run metadata, evaluation outputs, and cost
+reports. It also contains the generated leaderboard files consumed by the web
+frontend, such as `leaderboard/comparison_dcgen.csv`,
+`leaderboard/comparison_design2code.csv`, `leaderboard/dcgen-results.json`, and
+`leaderboard/design2code-results.json`.
+
+After copying completed run artifacts into `uibenchkit-experiments`, run:
+
+```bash
+python summarize_leaderboard.py
+```
+
+The script scans the raw experiment folders, extracts metrics from each
+`evaluation.json`, and regenerates the CSV/JSON files used for analysis and the
+public leaderboard.
 
 ## Evaluation Notes
 
